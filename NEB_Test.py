@@ -188,11 +188,11 @@ opt_cg = neb.Optimizer.ConjugateGradientNeb(epsilon, trust_radius)
 opt_bfgs = neb.Optimizer.BFGSNeb(trust_radius)
 
 idpp = neb.IDPP(images.get_images())
-images.set_energy_gradient_func(idpp.energy_gradient_idpp_fucntion)
+images.set_energy_gradient_func(idpp.energy_gradient_idpp_function)
 xyz_writer.write_images2File(images.get_positions(), 'InitialLineGuess.xyz', atom_list)
 opt = neb.Optimizer()
 
-test = opt.run_opt(images, opt_fire, idpp.energy_gradient_idpp_fucntion, max_steps=max_steps, force_max=force_max, rm_rot_trans=False, idpp=True)
+test = opt.run_opt(images, opt_fire, idpp.energy_gradient_idpp_function, max_steps=max_steps, force_max=force_max, rm_rot_trans=False, idpp=True)
 xyz_writer.write_images2File(test.get_positions(), 'InitialIdppGuess.xyz', atom_list)
 
 
