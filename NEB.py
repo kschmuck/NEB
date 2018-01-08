@@ -76,10 +76,10 @@ def get_tangent(img_0, img_1, img_2):
     # if img_i is None the tangent will be the spring to the next img
     if img_0 is None:
         tangent = img_1.position - img_2.position
-        return tangent
+        return tangent/np.linalg.norm(tangent)
     if img_2 is None:
         tangent = img_0.position - img_1.position
-        return tangent
+        return tangent/np.linalg.norm(tangent)
 
     def min_max(energy_0, energy_1, energy_2):
         a = abs(energy_2 - energy_1)
@@ -112,60 +112,32 @@ def spring_force(img_0, img_1, img_2):
     return force
 
 
-# def energy_gradient_surface(positions):
-#     # here place the function for the evaluation of the gradient and energy
-#     # position = img.position
-#     # energy_surface, gradient_surface = 0#energy_and_gradient(positions)
-#     energy_surface = energy_b(positions)
-#     gradient_surface = grad(positions)
-#     return energy_surface, gradient_surface
-
-
-class Images:
-    def __init__(self, images, atom_list=None):
+class ImageSet(list):
+    def __init__(self, image_list, atom_list=None):
+        # images ... list of image
         # atom_list ... string list
-        # idpp ... image dependent pair potential
-        self.images = images
+        self.images = image_list
         self.number_images_check()
-        self.set_optimizer_check = False
         self.energy_gradient_func = None
         self.atom_list = atom_list
-        self.opt_minima = False # if True the minima should get closer to their real minimum
 
-    def get_energy_gradient_of_image(self, position):
-        for element in self.images:
-            if all(element.position) == position:
-                self.energy_gradient_func(element)
+    def __iter__(self):
+        return self.images.iter()
 
-    def set_energy_gradient(self, energy, gradient):
-        ii = 0
-        for element in self.images:
-            element.energy = energy[ii]
-            element.gradient = gradient[ii, :]
-            ii += 1
-
-    def set_energy_gradient_func(self, energy_gradient_func):
-        self.energy_gradient_func = energy_gradient_func
-        for element in self.images:
-            element.energy_gradient_func = energy_gradient_func
+    def __getitem__(self, item):
+        return self.images.get(item)
 
     def set_positions(self, positions):
         # positions in a 3D matrix num_images x atoms x coordinates
         for ii in range(0, len(positions)):
             self.images[ii].position = positions[ii].reshape(np.shape(self.images[0].position))
 
-    def get_image_with_index(self, index):
-        return self.images[index]
-
     def get_positions(self):
         atoms = int(len(self.images[0].position)/3)
         positions = np.zeros([len(self.images), atoms, 3])
         for ii in range(0, len(self.images)):
-            positions[ii, :, :] = self.images[ii].position.reshape([atoms, 3])
+            positions[ii, :, :] = self.images[ii].get_position().reshape([atoms, 3])
         return positions
-
-    def get_images(self):
-        return self.images
 
     def get_image_position_list(self):
         positions = []
@@ -189,7 +161,6 @@ class Images:
         force = np.zeros([len(self.images), len(self.images[0].gradient)])
         for ii in range(0, len(self.images)):
             force[ii, :] = self.images[ii].gradient
-
         return force
 
     def update_rot_Mat(self):
@@ -202,35 +173,30 @@ class Images:
             self.images[ii].rot_mat = rot_mat[ii-1]
 
     def update_tangents(self):
-        self.number_images_check()
-        for ii in range(1, len(self.images) - 1):
-            self.images[ii].set_tangent(get_tangent(self.images[ii - 1], self.images[ii], self.images[ii + 1]))
-        if self.opt_minima:
-            self.images[0].set_tangent(get_tangent(None, self.images[0], self.images[1]))
-            self.images[-1].set_tangent(get_tangent(self.images[-2], self.images[-1], None))
+        for ii in range(0, len(self.images)):
+            if ii == 0:
+                self.images[0].tangent(get_tangent(None, self.images[0], self.images[1]))
+            elif ii == len(self.images):
+                self.images[-1].tangent(get_tangent(self.images[-2], self.images[-1], None))
+            else:
+                self.images[ii].tangent(get_tangent(self.images[ii - 1], self.images[ii], self.images[ii + 1]))
 
     def update_spring_force(self):
-        self.number_images_check()
         for ii in range(1, len(self.images) - 1):
             self.images[ii].spring_force = spring_force(self.images[ii - 1], self.images[ii], self.images[ii + 1])
 
-    def update_energy_gradient(self, check):
-        if not check:
-            for element in self.images:
-                element.set_energy_gradient(self.energy_gradient_func)
-        else:
-            for element in self.images:
-                element.set_energy_gradient(self.energy_gradient_func, element.d_ij_k)
+    def update_energy_gradient(self):
+        for element in self.images:
+            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k)
 
-    def update_images(self, check):
-        self.update_energy_gradient(check)
+    def update_images(self):
+        self.update_energy_gradient()
         self.update_tangents()
         self.update_spring_force()
 
     def set_optimizer(self, optimizer):
         for element in self.images:
             element.optimizer = copy.deepcopy(optimizer)
-        self.set_optimizer_check = True
 
     def set_spring_constant(self, spring_constant):
         if isinstance(spring_constant, list):
@@ -245,13 +211,6 @@ class Images:
         if len(self.images) < 3:
             print('Error to less images ')
 
-    def get_max_force_surface_image(self):
-        force = np.linalg.norm(self.images[1].force_norm())
-        for ii in range(2, len(self.images) - 1):
-            if force < np.linalg.norm(self.images[ii].force_norm):
-                force = np.linalg.norm(self.images[ii].force_norm)
-        return force
-
     def set_climbing_image(self, climbing_image):
         if climbing_image:
             index = self.get_index_image_energy_max()
@@ -262,13 +221,8 @@ class Images:
         return index
 
     def get_index_image_energy_max(self):
-        energy_image = self.images[0].energy
-        index = 0
-        for ii in range(1, len(self.images)):
-            if energy_image < self.images[ii].energy:
-                energy_image = self.images[ii].energy
-                index = ii
-        return index
+        energy = np.asarray(self.get_image_energy_list())
+        return np.argmax(energy)
 
 
 class Image:
@@ -293,10 +247,16 @@ class Image:
     def set_position(self, position):
         self.position.append(position)
 
-    def set_energy_gradient(self, energy_gradient_function, *args):
+    def update_energy_gradient(self, energy_gradient_function, *args):
         energy, gradient = energy_gradient_function(self.position, *args)
         self.energy.append(energy)
         self.gradient(gradient)
+
+    def get_current_position(self):
+        return self.position[-1]
+
+    def get_current_energy(self):
+        return self.energy[-1]
 
     def get_energy_force(self, *args):
         if not self.climbing_image:
@@ -334,38 +294,32 @@ class Optimizer:
                 force = f
         print(str(force) + ' of image ' + str(jj+1))
 
-    def run_opt(self, images, optimizer, energy_gradient_func, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False, idpp=False):
+    def run_opt(self, images, optimizer, energy_gradient_func, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False):
         self.fmax = force_max
         images.set_optimizer(optimizer)
         images.set_energy_gradient_func(energy_gradient_func)
         data_writer = Writer()
-        if opt_minima:
-            index_start = 0
-            index_end = len(images.get_images())
-            images.opt_minima = opt_minima
-        else:
-            index_start = 1
-            index_end = len(images.get_images())-1
+        if not opt_minima:
+            images.images[0].frozen = True
+            images.images[-1].frozen = True
 
         converged = False
         step = 0
         if rm_rot_trans:
             images.update_rot_Mat()
-        images.update_images(idpp)
+        images.update_images()
         while not converged:
 
-            for ii in range(index_start, index_end):
-                opt_method = images.get_images()[ii].optimizer
-                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].get_energy_force, images.get_images()[ii].position)
+            for ii in range(0, len(images.images)):
+                if not images.images[ii].frozen:
+                    opt_method = images.images[ii].optimizer
+                    images.images[ii].set_position = opt_method.step(images.images[ii].get_energy_force, images.images[ii].get_current_position)
             if rm_rot_trans:
                 images.update_rot_Mat()
-                for ii in range(index_start, index_end):
+                for ii in range(0, len(images.images)):
                     images.get_images()[ii].optimizer.update(images.get_images()[ii])
-            images.update_images(idpp)
+            images.update_images()
 
-            if not idpp:
-                xyz_writer.write_images2File(images.get_positions(), 'Test_step.xyz', images.atom_list)
-                data_writer.write('Ethane_3_images_'+str(step)+'.xyz', images.get_image_position_list(), images.atom_list)
 
             if self.is_converged(images.get_images()):
                 converged = True
