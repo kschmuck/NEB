@@ -1,4 +1,4 @@
-from pes import energy, gradient
+# from pes import energy, gradient
 from pes import energy_b, grad
 # from ethane_PES import energy_and_gradient
 # from HNCPES import energy_and_gradient
@@ -112,13 +112,13 @@ def spring_force(img_0, img_1, img_2):
     return force
 
 
-def energy_gradient_surface(positions):
-    # here place the fucntion for the evaluation of the gradient and energy
-    # position = img.position
-    # energy_surface, gradient_surface = 0#energy_and_gradient(positions)
-    energy_surface = energy_b(positions)
-    gradient_surface = grad(positions)
-    return energy_surface, gradient_surface
+# def energy_gradient_surface(positions):
+#     # here place the function for the evaluation of the gradient and energy
+#     # position = img.position
+#     # energy_surface, gradient_surface = 0#energy_and_gradient(positions)
+#     energy_surface = energy_b(positions)
+#     gradient_surface = grad(positions)
+#     return energy_surface, gradient_surface
 
 
 class Images:
@@ -287,17 +287,8 @@ class Image:
         self.climbing_image = False
         self.d_ij_k = None
 
-        #
-        self.force = None
-
-    def set_tangent(self, tangent):
-        self.tangent = tangent
-
     def set_energy_gradient(self, energy_gradient_function, *args):
         self.energy, self.gradient = energy_gradient_function(self.position, *args)
-
-    def get_position(self):
-        return self.position
 
     def get_force(self, *args):
         if not self.climbing_image:
@@ -308,25 +299,11 @@ class Image:
         return self.energy, force
 
     def force_norm(self):
-        energy, grad = self.new_get_force()
-        #
-        # grad = self.force
-        return np.linalg.norm(grad)
-
-    def gradient_norm(self):
-        normal_grad = -self.gradient + np.dot(self.gradient, self.tangent) *self.tangent
-        return np.linalg.norm(normal_grad) # self.gradient
+        energy, force = self.get_force()
+        return np.linalg.norm(force)
 
     def get_norm_force(self):
         return -self.gradient + np.dot(self.gradient, self.tangent) *self.tangent
-
-    def get_para_force(self):
-        return np.dot(self.spring_force, self.tangent)*self.tangent
-
-    def ratio_spring_grad(self):
-        sp_force = np.dot(self.spring_force, self.tangent)*self.tangent
-        grad = -self.gradient + np.dot(self.gradient, self.tangent) * self.tangent
-        return sp_force/grad
 
 
 class Optimizer:
@@ -344,14 +321,11 @@ class Optimizer:
         return True
 
     def get_max_force(self, images):
-        images = images.get_images()
-        # force = images[1].force_norm()
-        force = images[1].gradient_norm()
+        force = images[1].force_norm()
         jj = 1
         ii = 1
         for element in images[2:-1]:
-            f = element.gradient_norm()
-            # f = element.force_norm()
+            f = element.force_norm()
             ii = ii + 1
             if f > force:
                 jj = ii
@@ -380,7 +354,7 @@ class Optimizer:
 
             for ii in range(index_start, index_end):
                 opt_method = images.get_images()[ii].optimizer
-                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].new_get_force, images.get_images()[ii].position)
+                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].get_force, images.get_images()[ii].position)
                 print(images.get_images()[ii].get_norm_force())
             if rm_rot_trans:
                 images.update_rot_Mat()
