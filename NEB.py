@@ -121,8 +121,6 @@ def energy_gradient_surface(positions):
     return energy_surface, gradient_surface
 
 
-
-
 class Images:
     def __init__(self, images, atom_list=None):
         # atom_list ... string list
@@ -382,7 +380,7 @@ class Optimizer:
 
             for ii in range(index_start, index_end):
                 opt_method = images.get_images()[ii].optimizer
-                images.get_images()[ii].position = opt_method.new_step(images.get_images()[ii].new_get_force, images.get_images()[ii].position)
+                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].new_get_force, images.get_images()[ii].position)
                 print(images.get_images()[ii].get_norm_force())
             if rm_rot_trans:
                 images.update_rot_Mat()
