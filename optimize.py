@@ -1,7 +1,5 @@
 import numpy as np
-import xyz_file_writer as xyz_writer
-import scipy as sp
-import scipy.optimize as sp_opt
+
 
 def scale_step(step, trust_radius):
     if np.linalg.norm(step) > trust_radius:
@@ -14,7 +12,7 @@ class SteepestDecent:
         self.alpha = alpha
         self.trust_radius = trust_radius
 
-    def new_step(self, gradient_function, func_values, *args):
+    def tep(self, gradient_function, func_values, *args):
         func, gradient = gradient_function(func_values, *args)
         return func_values + scale_step(self.alpha * gradient, self.trust_radius)
 
@@ -25,7 +23,7 @@ class Verlete:
         self.delta_t = delta_t
         self.trust_radius = trust_radius
 
-    def new_step(self, gradient_fucntion, func_values, *args):
+    def step(self, gradient_fucntion, func_values, *args):
         func, gradient = gradient_fucntion(func_values, *args)
         if self.velocity is None:
             self.velocity = gradient * self.delta_t
@@ -58,7 +56,7 @@ class Fire:
 
         self.trust_radius = trust_radius
 
-    def new_step(self, gradient_function, func_values, *args):
+    def step(self, gradient_function, func_values, *args):
         # algorithm from http://users.jyu.fi/~pekkosk/resources/pdf/FIRE.pdf
         func, gradient = gradient_function(func_values, *args)
         if self.velocity is None:
@@ -89,7 +87,7 @@ class ConjuageGradient:
         self.force_before = None
         self.trust_radius = trust_radius
 
-    def new_step(self, gradient_func, func_values, *args):
+    def step(self, gradient_func, func_values, *args):
         func, gradient = gradient_func(func_values, *args)
         if self.s is None:
             # func, gradient = gradient_func(func_values, *args)
@@ -128,7 +126,7 @@ class BFGS:
         self.gradient_func = None
         self.s = None
 
-    def new_step(self, gradient_func, func_values, *args):
+    def step(self, gradient_func, func_values, *args):
         self.gradient_func = gradient_func
         self.func_values = func_values
         func, gradient = gradient_func(func_values, *args)
@@ -163,34 +161,4 @@ class BFGS:
     def minimize(self, alpha, *args):
         func, gradient = self.gradient_func(self.func_values + alpha * self.s, *args)
         return func
-
-
-# def center_geometry(positions):
-#     # cartesian
-#     # atoms in row and coordiantes in columns x, y, z
-#     mean_value = np.zeros([len(positions), 3])
-#     for kk in range(0, len(positions)):
-#         pos = positions[kk, :, :]
-#         mean_value[kk, :] = np.array([np.mean(pos[:, 0]), np.mean(pos[:, 1]), np.mean(pos[:, 2])])
-#     return mean_value
-#
-#
-# def rotation_geometry(positions):
-#     # cartesian
-#     # atoms in row and coordiantes in columns x, y, z
-#     rotation_matrix_a = []
-#     center_geometry(positions)
-#
-#     for ii in range(1, len(positions)):
-#         u, w, v = np.linalg.svd(np.dot(positions[ii, :, :].T, positions[ii-1, :, :]))
-#         a_j = np.dot(u, v)
-#
-#         if np.linalg.det(a_j) < 0:
-#             u[:, -1] = -u[:, -1]
-#             a_j = np.dot(u, v)
-#         positions[ii, :, :] = np.dot(positions[ii, :, :], a_j)
-#         rotation_matrix_a.append(a_j)
-#
-#     return positions, rotation_matrix_a
-
 
