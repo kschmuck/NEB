@@ -207,7 +207,7 @@ class IDPP:
                 energy = energy + 1./distance**(4./2.) * (d_ij_k[ii, jj]-distance)**2
         return energy
 
-    def energy_gradient_idpp_fucntion(self, position, d_ij_k):
+    def energy_gradient_idpp_function(self, position, d_ij_k):
         grad = self.calc_forces_numerical(position, d_ij_k)
         e = self.calc_energy_numerical(position, d_ij_k)
         return e, grad
@@ -533,4 +533,3 @@ class Optimizer:
             self.force = np.dot(self.force.reshape([int(len(self.force)/3), 3]), rot_mat).flatten()
             self.force_before = np.dot(self.force_before.reshape([int(len(self.force_before)/3), 3]), rot_mat).flatten()
             self.s = np.dot(self.s.reshape([int(len(self.s)/3), 3]), rot_mat).flatten()
-
