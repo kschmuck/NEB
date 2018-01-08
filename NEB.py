@@ -273,50 +273,52 @@ class Images:
 
 class Image:
     def __init__(self, position):
-        self.position = position
+        # initialize values
+        # history of position, energy and gradient
+        self.position = []
+        self.energy = []
+        self.gradient = []
 
-        # initialize this values
+        self.frozen = False
+        self.climbing_image = False
         self.spring_constant = 0.0
         self.spring_force = 0.0
-        self.energy = 0.0
-        self.gradient = 0.0
         self.tangent = None
-
         self.rot_mat = None
         self.optimizer = None
-        self.climbing_image = False
         self.d_ij_k = None
 
-    def set_energy_gradient(self, energy_gradient_function, *args):
-        self.energy, self.gradient = energy_gradient_function(self.position, *args)
+        self.position.append(position)
 
-    def get_force(self, *args):
+    def set_position(self, position):
+        self.position.append(position)
+
+    def set_energy_gradient(self, energy_gradient_function, *args):
+        energy, gradient = energy_gradient_function(self.position, *args)
+        self.energy.append(energy)
+        self.gradient(gradient)
+
+    def get_energy_force(self, *args):
         if not self.climbing_image:
             force = np.dot(self.spring_force, self.tangent)*self.tangent - \
-                   self.gradient + np.dot(self.gradient, self.tangent) * self.tangent  # -(gradient - parallel Component)
+                   self.gradient[-1] + np.dot(self.gradient[-1], self.tangent) * self.tangent  # -(gradient - parallel Component)
         else:
-            force = 2.*np.dot(self.gradient, self.tangent) * self.tangent
-        return self.energy, force
+            force = 2.*np.dot(self.gradient[-1], self.tangent) * self.tangent
+        return self.energy[-1], force
 
     def force_norm(self):
         energy, force = self.get_force()
         return np.linalg.norm(force)
 
-    def get_norm_force(self):
-        return -self.gradient + np.dot(self.gradient, self.tangent) *self.tangent
-
 
 class Optimizer:
     # Optimizer for the Nudged elastic band
     def __init__(self): # , trust_radius, fmax
-        # self.trust_radius = trust_radius
         self.fmax = None
 
     def is_converged(self, images):
-        for element in images[1:---1]:
-            # if element.force_norm() > self.fmax:
-            #     return False
-            if element.gradient_norm() > self.fmax:
+        for element in images[1:-1]:
+            if element.force_norm() > self.fmax:
                 return False
         return True
 
@@ -354,8 +356,7 @@ class Optimizer:
 
             for ii in range(index_start, index_end):
                 opt_method = images.get_images()[ii].optimizer
-                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].get_force, images.get_images()[ii].position)
-                print(images.get_images()[ii].get_norm_force())
+                images.get_images()[ii].position = opt_method.step(images.get_images()[ii].get_energy_force, images.get_images()[ii].position)
             if rm_rot_trans:
                 images.update_rot_Mat()
                 for ii in range(index_start, index_end):
