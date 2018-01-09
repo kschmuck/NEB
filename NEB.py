@@ -393,4 +393,3 @@ class Optimizer:
             self.force = np.dot(self.force.reshape([int(len(self.force)/3), 3]), rot_mat).flatten()
             self.force_before = np.dot(self.force_before.reshape([int(len(self.force_before)/3), 3]), rot_mat).flatten()
             self.s = np.dot(self.s.reshape([int(len(self.s)/3), 3]), rot_mat).flatten()
-

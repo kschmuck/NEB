@@ -188,6 +188,36 @@ opt_cg = neb.Optimizer.ConjugateGradientNeb(epsilon, trust_radius)
 opt_bfgs = neb.Optimizer.BFGSNeb(trust_radius)
 
 
+# idpp = neb.IDPP(images.get_images())
+# images.set_energy_gradient_func(idpp.energy_gradient_idpp_function)
+# xyz_writer.write_images2File(images.get_positions(), 'InitialLineGuess.xyz', atom_list)
+# opt = neb.Optimizer()
+#
+# test = opt.run_opt(images, opt_fire, idpp.energy_gradient_idpp_function, max_steps=max_steps, force_max=force_max, rm_rot_trans=False, idpp=True)
+# xyz_writer.write_images2File(test.get_positions(), 'InitialIdppGuess.xyz', atom_list)
+#
+#
+# k = 10**-1 # 10**-10 #10**-6 -4 -3
+# delta_t_fire = 3.5 #3.5
+# delta_t_verlete = 0.01 #0.2
+# force_max = 0.01#0.001
+# max_steps = 50
+# epsilon = 0.01 #00001
+# trust_radius = 0.005
+#
+# opt_steepest_decent = neb.Optimizer.SteepestDecentNeb(epsilon, trust_radius)
+# opt_fire = neb.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
+# opt_verlete = neb.Optimizer.VerleteNeb(delta_t_verlete, trust_radius)
+#
+# # filename = 'Ethane_13.xyz'
+# # read_er = Reader()
+# # read_er.read(filename)
+# # geom = read_er.geometries
+# # atom_list = read_er.atom_list
+# # images = neb.set_images(geom)
+# # images = neb.Images(images, atom_list=read_er.atom_list)
+
+
 idpp_potential = idpp.IDPP(images)
 images.energy_gradient_func = idpp_potential.energy_gradient_idpp_fucntion
 # xyz_writer.write_images2File(images.get_positions(), 'InitialLineGuess.xyz', atom_list)
