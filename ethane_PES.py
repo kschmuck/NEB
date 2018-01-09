@@ -1,4 +1,5 @@
 import pyQChem as qc
+import os
 
 rem = qc.input_classes.rem_array(rem_init="jobtype opt")
 rem.add("GEOM_OPT_TOL_GRADIENT", "10000000000")
@@ -13,10 +14,19 @@ rem.add("GEOM_OPT_COORDS", "0")
 
 def energy_and_gradient(xyzs, *args): # argmuent of image
     number = args[1]
-    flag = args[2]
-    if flag:
-        rem.add("SCF_GUESS", "READ")
+    # flag = args[2]
+    # if flag:
+    #     rem.add("SCF_GUESS", "READ")
     name = 'ethane_' + str(number)
+    dir = os.path.dirname(__file__)
+    folder_path = os.path.join(dir, 'scratch', name + '.dir')
+    if os.path.exists(folder_path):
+        file_path = os.path.join(folder_path, '53.0')
+        if os.path.exists(file_path):
+            file_path = os.path.join(folder_path, '54.0')
+            if os.path.exists(file_path):
+                rem.add("SCF_GUESS", "READ")
+
     in_file = qc.input_classes.inputfile()
     geo = qc.input_classes.cartesian(
         atom_list = [["H", str(xyzs[0]), str(xyzs[1]), str(xyzs[2])],
