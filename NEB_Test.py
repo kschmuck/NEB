@@ -1,11 +1,11 @@
 import numpy as np
 import NEB as neb
 import xyz_file_writer as xyz_writer
-import optimize as opt
+import IDPP as idpp
+from pes import energy_gradient
 from data_reader_writer import Reader, Writer
 
-
-# opt minima --> with perumtation
+# opt minima --> with permutation
 minima_a = np.array([
     -1.15706, -1.01589,  0.06129, # N
     -1.15706,  0.45486, -0.91044, # F
@@ -163,7 +163,7 @@ atom_list = ['H', 'H', 'H', 'C', 'C', 'H', 'H', 'H']
 #
 #
 # chemical accuracy 0.043 eV
-number_of_images = 1
+number_of_images = 5
 k = 10**-6# 10**-10 #10**-6
 delta_t_fire = 3.5 #3.5
 delta_t_verlete = 0.4 #0.2
@@ -177,7 +177,7 @@ import time
 t = time.clock()
 
 images = neb.create_images(minima_a, minima_b, number_of_images)
-images = neb.Images(images, atom_list=atom_list)
+images = neb.ImageSet(images, atom_list=atom_list)
 images.set_spring_constant(k)
 
 opt_steepest_decent = neb.Optimizer.SteepestDecentNeb(epsilon, trust_radius)
@@ -187,35 +187,36 @@ opt_verlete = neb.Optimizer.VerleteNeb(delta_t_verlete, trust_radius)
 opt_cg = neb.Optimizer.ConjugateGradientNeb(epsilon, trust_radius)
 opt_bfgs = neb.Optimizer.BFGSNeb(trust_radius)
 
-idpp = neb.IDPP(images.get_images())
-images.set_energy_gradient_func(idpp.energy_gradient_idpp_fucntion)
-xyz_writer.write_images2File(images.get_positions(), 'InitialLineGuess.xyz', atom_list)
+
+idpp_potential = idpp.IDPP(images)
+images.energy_gradient_func = idpp_potential.energy_gradient_idpp_fucntion
+# xyz_writer.write_images2File(images.get_positions(), 'InitialLineGuess.xyz', atom_list)
 opt = neb.Optimizer()
 
-test = opt.run_opt(images, opt_fire, idpp.energy_gradient_idpp_fucntion, max_steps=max_steps, force_max=force_max, rm_rot_trans=False, idpp=True)
-xyz_writer.write_images2File(test.get_positions(), 'InitialIdppGuess.xyz', atom_list)
+images = opt.run_opt(images, opt_fire, max_steps=max_steps, force_max=force_max, rm_rot_trans=False)
+# xyz_writer.write_images2File(images.get_positions(), 'InitialIdppGuess.xyz', atom_list)
 
 
-k = 10**-1 # 10**-10 #10**-6 -4 -3
-delta_t_fire = 3.5 #3.5
-delta_t_verlete = 0.01 #0.2
-force_max = 0.01#0.001
-max_steps = 50
-epsilon = 0.01 #00001
-trust_radius = 0.005
-
-opt_steepest_decent = neb.Optimizer.SteepestDecentNeb(epsilon, trust_radius)
-opt_fire = neb.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
-opt_verlete = neb.Optimizer.VerleteNeb(delta_t_verlete, trust_radius)
-
-# filename = 'Ethane_13.xyz'
-# read_er = Reader()
-# read_er.read(filename)
-# geom = read_er.geometries
-# atom_list = read_er.atom_list
-# images = neb.set_images(geom)
-# images = neb.Images(images, atom_list=read_er.atom_list)
-
-opt = neb.Optimizer()
-test = opt.run_opt(images, opt_verlete, neb.energy_gradient_surface, max_steps=max_steps, force_max=force_max, opt_minima=False, rm_rot_trans=False)
-xyz_writer.write_images2File(test.get_positions(), 'FinishedPath.xyz', atom_list)
+# k = 10**-1 # 10**-10 #10**-6 -4 -3
+# delta_t_fire = 3.5 #3.5
+# delta_t_verlete = 0.01 #0.2
+# force_max = 0.01#0.001
+# max_steps = 50
+# epsilon = 0.01 #00001
+# trust_radius = 0.005
+# images.set_spring_constant(k)
+# opt_steepest_decent = neb.Optimizer.SteepestDecentNeb(epsilon, trust_radius)
+# opt_fire = neb.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
+# opt_verlete = neb.Optimizer.VerleteNeb(delta_t_verlete, trust_radius)
+#
+# # filename = 'Ethane_13.xyz'
+# # read_er = Reader()
+# # read_er.read(filename)
+# # geom = read_er.geometries
+# # atom_list = read_er.atom_list
+# # images = neb.set_images(geom)
+# # images = neb.Images(images, atom_list=read_er.atom_list)
+#
+# opt = neb.Optimizer()
+# test = opt.run_opt(images, opt_verlete, neb.energy_gradient_surface, max_steps=max_steps, force_max=force_max, opt_minima=False, rm_rot_trans=False)
+# xyz_writer.write_images2File(test.get_positions(), 'FinishedPath.xyz', atom_list)
