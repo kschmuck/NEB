@@ -146,10 +146,10 @@ class ImageSet(list):
             self[ii].set_position(positions[ii].reshape(np.shape(self[0].position)))
 
     def get_positions(self):
-        atoms = int(len(self.images[0].position)/3)
+        atoms = int(len(self[0].get_current_position())/3)
         positions = np.zeros([len(self), atoms, 3])
         for ii in range(0, len(self)):
-            positions[ii, :, :] = self[ii].get_position().reshape([atoms, 3])
+            positions[ii, :, :] = self[ii].get_current_position().reshape([atoms, 3])
         return positions
 
     def get_image_position_list(self):
@@ -199,8 +199,10 @@ class ImageSet(list):
             self[ii].spring_force = spring_force(self[ii - 1], self[ii], self[ii + 1])
 
     def update_energy_gradient(self):
+        ii = 0
         for element in self:
-            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k)
+            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii)
+            ii += 1
 
     def update_images(self):
         self.update_energy_gradient()
@@ -246,7 +248,7 @@ class Image:
         self.energy = []
         self.gradient = []
         # for faster convergence use the previous wave function guess
-        self.electronic_density = None
+        self.scf_guess = None
 
         # values of nuged elastic band
         self.frozen = False
@@ -273,9 +275,10 @@ class Image:
         self.energy.append(energy)
 
     def update_energy_gradient(self, energy_gradient_function, *args):
-        energy, gradient = energy_gradient_function(self.get_current_position(), *args)
+        energy, gradient, scf_guess = energy_gradient_function(self.get_current_position(), *args)
         self.energy.append(energy)
         self.gradient.append(gradient)
+        self.scf_guess = scf_guess
 
     def get_current_position(self):
         return self.position[-1]
@@ -345,7 +348,7 @@ class Optimizer:
                 for ii in range(0, len(images.images)):
                     images[ii].optimizer.update(images[ii])
             images.update_images()
-
+            self.get_max_force(images)
             if self.is_converged(images):
                 converged = True
                 print('converged ' + str(step))
