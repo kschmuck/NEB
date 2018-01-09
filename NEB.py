@@ -198,14 +198,14 @@ class ImageSet(list):
         for ii in range(1, len(self) - 1):
             self[ii].spring_force = spring_force(self[ii - 1], self[ii], self[ii + 1])
 
-    def update_energy_gradient(self):
+    def update_energy_gradient(self, flag):
         ii = 0
         for element in self:
-            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii)
+            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii, flag)
             ii += 1
 
-    def update_images(self):
-        self.update_energy_gradient()
+    def update_images(self, flag=False):
+        self.update_energy_gradient(flag)
         self.update_tangents()
         self.update_spring_force()
 
@@ -347,7 +347,7 @@ class Optimizer:
                 images.update_rot_Mat()
                 for ii in range(0, len(images.images)):
                     images[ii].optimizer.update(images[ii])
-            images.update_images()
+            images.update_images(flag=True)
             self.get_max_force(images)
             if self.is_converged(images):
                 converged = True

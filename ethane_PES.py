@@ -9,11 +9,13 @@ rem.add("SYM_IGNORE", "TRUE")
 rem.add("exchange", "hf")
 rem.add("basis", "aug-cc-pVDZ")
 rem.add("GEOM_OPT_COORDS", "0")
-rem.add("SCF_GUESS", "READ")
-
+# rem.add("SCF_GUESS", "READ")
 
 def energy_and_gradient(xyzs, *args): # argmuent of image
     number = args[1]
+    flag = args[2]
+    if flag:
+        rem.add("SCF_GUESS", "READ")
     name = 'ethane_' + str(number)
     in_file = qc.input_classes.inputfile()
     geo = qc.input_classes.cartesian(
