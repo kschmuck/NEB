@@ -100,7 +100,7 @@ def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
 
     # force_i .... current force
     # force_j .... force before
-    # RMS (root mean square is necessary)
+    # RMS (root mean square is necessary) of forces
     force_i = np.sqrt(np.dot(force_i, force_i)/len(force_j))
     force_j = np.sqrt(np.dot(force_j, force_j)/len(force_j))
     chk = force_i - force_j
@@ -109,7 +109,7 @@ def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
     skip = False
     # if chk.all() > epsilon:
     if chk > epsilon:
-        alpha = alpha * (1.0 + gamma)
+        alpha = alpha * gamma
         skip = True
         n_back = n_0
     else:
@@ -120,7 +120,7 @@ def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
                 alpha = alpha_0
                 skip = True
             else:
-                alpha = alpha * (1.0 + gamma)
+                alpha = alpha / gamma
     return alpha, n_back, skip
 
 
@@ -129,7 +129,7 @@ class ConjuageGradient:
     # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization
     # Herbol, Stevenson, Clancy
     # Journal of Chemical Theory and Computation 2017, 13, 3250-3259
-    def __init__(self, trust_radius, gamma=0.3, n_back=2, alpha=1.0, epsilon=0.1):
+    def __init__(self, trust_radius, gamma=0.1, n_back=10, alpha=.1, epsilon=0.3):
         self.beta = 1.0
         self.alpha = alpha
         self.s = None
@@ -194,11 +194,12 @@ class BFGS:
     def step(self, gradient_func, func_values, *args):
         # self.func_values = func_values
         func, gradient = gradient_func(func_values, *args)
+        self.func_values_hold = func_values
         if self.gradient_hold is None:
             self.gradient_hold = gradient
         else:
             self.alpha, self.n_back, skip = backtracking(gradient, self.gradient_hold, self.epsilon, self.alpha,
-                                                              self.alpha_0, self.n_0, self.n_back, self.gamma)
+                                                         self.alpha_0, self.n_0, self.n_back, self.gamma)
             if skip:
                 self.hessian = np.eye(len(func_values), len(func_values))
                 self.is_identity = True
@@ -219,7 +220,6 @@ class BFGS:
 
         self.s = np.dot(self.hessian, gradient)
         self.d = scale_step(self.s, self.trust_radius)
-        self.func_values_hold = func_values
         func_values += self.alpha * self.d
 
         return func_values
