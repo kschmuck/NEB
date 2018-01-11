@@ -139,6 +139,7 @@ class ImageSet(list):
         self.number_images_check()
         self.energy_gradient_func = None
         self.atom_list = atom_list
+        # self.tangent_calc_name=
 
     def set_positions(self, positions):
         # positions in a 3D matrix num_images x atoms x coordinates
@@ -188,24 +189,24 @@ class ImageSet(list):
     def update_tangents(self):
         for ii in range(0, len(self)):
             if ii == 0:
-                self[0].tangent = get_tangent(None, self[0], self[1])
+                self[0].tangent = get_tangent(None, self[0], self[1], method='simple_improved')
             elif ii == (len(self)-1):
-                self[-1].tangent = get_tangent(self[-2], self[-1], None)
+                self[-1].tangent = get_tangent(self[-2], self[-1], None, method='simple_improved')
             else:
-                self[ii].tangent = get_tangent(self[ii - 1], self[ii], self[ii + 1])
+                self[ii].tangent = get_tangent(self[ii - 1], self[ii], self[ii + 1], method='simple_improved')
 
     def update_spring_force(self):
         for ii in range(1, len(self) - 1):
             self[ii].spring_force = spring_force(self[ii - 1], self[ii], self[ii + 1])
 
-    def update_energy_gradient(self, flag):
+    def update_energy_gradient(self):
         ii = 0
         for element in self:
-            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii, flag)
+            element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii)
             ii += 1
 
-    def update_images(self, flag=False):
-        self.update_energy_gradient(flag)
+    def update_images(self):
+        self.update_energy_gradient()
         self.update_tangents()
         self.update_spring_force()
 
@@ -226,13 +227,10 @@ class ImageSet(list):
         if len(self) < 3:
             print('Error to less images ')
 
-    def set_climbing_image(self, climbing_image):
-        if climbing_image:
-            index = self.get_index_image_energy_max()
-            self[index].spring_constant = 0.0
-            self[index].climbing_image = True
-        else:
-            return
+    def set_climbing_image(self):
+        index = self.get_index_image_energy_max()
+        self[index].spring_constant = 0.0
+        self[index].climbing_image = True
         return index
 
     def get_index_image_energy_max(self):
@@ -309,8 +307,9 @@ class Optimizer:
 
     def is_converged(self, images):
         for element in images:
-            if element.force_norm() > self.fmax:
-                return False
+            if not element.frozen:
+                if element.force_norm() > self.fmax:
+                    return False
         return True
 
     def get_max_force(self, images):
@@ -325,7 +324,7 @@ class Optimizer:
                 force = f
         print(str(force) + ' of image ' + str(jj+1))
 
-    def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False):
+    def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False, freezing=False):
         self.fmax = force_max
         images.set_optimizer(optimizer)
         if not opt_minima:
@@ -347,8 +346,8 @@ class Optimizer:
                 images.update_rot_Mat()
                 for ii in range(0, len(images.images)):
                     images[ii].optimizer.update(images[ii])
-            images.update_images(flag=True)
-            self.get_max_force(images)
+            images.update_images()
+
             if self.is_converged(images):
                 converged = True
                 print('converged ' + str(step))
@@ -357,7 +356,7 @@ class Optimizer:
 
             step += 1
             if step >= max_steps:
-                print('not converged' + str(step))
+                print('not converged ' + str(step))
                 for element in images[1:-1]:
                     print(element.force_norm())
                 break
@@ -392,6 +391,8 @@ class Optimizer:
     class ConjugateGradientNeb(ConjuageGradient):
 
         def update(self, img):
+            if self.skip:
+                return
             rot_mat = img.rot_mat
             self.force = np.dot(self.force.reshape([int(len(self.force)/3), 3]), rot_mat).flatten()
             self.force_before = np.dot(self.force_before.reshape([int(len(self.force_before)/3), 3]), rot_mat).flatten()

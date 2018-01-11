@@ -8,12 +8,27 @@ def scale_step(step, trust_radius):
 
 
 class SteepestDecent:
-    def __init__(self, alpha, trust_radius):
+    def __init__(self, trust_radius, alpha=0.1): # , gamma=0.7, n_back=100, alpha=1.0, epsilon=0.1):
         self.alpha = alpha
         self.trust_radius = trust_radius
+        self.gradient_before = None
 
-    def tep(self, gradient_function, func_values, *args):
+        # self.alpha_0 = self.alpha
+        # self.gamma = gamma
+        # self.n_back = n_back
+        # self.n_0 = n_back
+        # self.epsilon = epsilon
+
+    def step(self, gradient_function, func_values, *args):
         func, gradient = gradient_function(func_values, *args)
+        # if self.gradient_before is None:
+        #     self.gradient_before = gradient
+        # else:
+        #     self.alpha, self.n_back, self.skip = backtracking(gradient, self.gradient_before, self.epsilon, self.alpha,
+        #                                                       self.alpha_0, self.n_0, self.n_back, self.gamma)
+        # step = scale_step(gradient, self.trust_radius)
+        # func_values += step*self.alpha
+        # return func_values
         return func_values + scale_step(self.alpha * gradient, self.trust_radius)
 
 
@@ -78,87 +93,134 @@ class Fire:
         return func_values + scale_step(self.velocity*self.delta_t, self.trust_radius)
 
 
+def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
+    # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization
+    # Herbol, Stevenson, Clancy
+    # Journal of Chemical Theory and Computation 2017, 13, 3250-3259
+
+    # force_i .... current force
+    # force_j .... force before
+    # RMS (root mean square is necessary)
+    force_i = np.sqrt(np.dot(force_i, force_i)/len(force_j))
+    force_j = np.sqrt(np.dot(force_j, force_j)/len(force_j))
+    chk = force_i - force_j
+    # chk /= np.linalg.norm(force_i + force_i)
+    chk /= abs(force_i+force_j)
+    skip = False
+    # if chk.all() > epsilon:
+    if chk > epsilon:
+        alpha = alpha * (1.0 + gamma)
+        skip = True
+        n_back = n_0
+    else:
+        n_back = n_back - 1
+        if n_back < 0:
+            n_back = n_0
+            if alpha < alpha_0:
+                alpha = alpha_0
+                skip = True
+            else:
+                alpha = alpha * (1.0 + gamma)
+    return alpha, n_back, skip
+
+
 class ConjuageGradient:
-    def __init__(self, alpha, trust_radius):
+    # special case of CG with backtracking and no line search, thus evaluation of the force is very expensive
+    # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization
+    # Herbol, Stevenson, Clancy
+    # Journal of Chemical Theory and Computation 2017, 13, 3250-3259
+    def __init__(self, trust_radius, gamma=0.3, n_back=2, alpha=1.0, epsilon=0.1):
         self.beta = 1.0
         self.alpha = alpha
         self.s = None
         self.force = None
         self.force_before = None
         self.trust_radius = trust_radius
+        self.epsilon = epsilon
+
+        # parameter for backtracking
+        self.alpha_0 = self.alpha
+        self.gamma = gamma
+        self.n_back = n_back
+        self.n_0 = n_back
+        self.skip = False
 
     def step(self, gradient_func, func_values, *args):
         func, gradient = gradient_func(func_values, *args)
         if self.s is None:
-            # func, gradient = gradient_func(func_values, *args)
             self.s = gradient
             self.force = gradient
         else:
             self.force = gradient
+            self.alpha, self.n_back, self.skip = backtracking(self.force, self.force_before, self.epsilon, self.alpha, self.alpha_0, self.n_0, self.n_back, self.gamma)
             beta = np.dot(self.force.T, self.force) / np.dot(self.force_before.T, self.force_before)
-
             if np.isnan(beta) | np.isinf(beta):
                 beta = 1.0
             self.s = self.force + beta * self.s
+
+        self.s *= self.alpha
         self.s = scale_step(self.s, self.trust_radius)
         func_values = func_values + self.s
-        # func, gradient = gradient_func(func_values, *args)
         self.force_before = self.force
-        # self.force = gradient
-
         return func_values
 
-
-# Todo still fails (no convergence) --> alpha evaluation?
 class BFGS:
-    def __init__(self, trust_radius, hessian=None):
+    # special case of BFGS with out any line search, but backtracking
+    # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization
+    # Herbol, Stevenson, Clancy
+    # Journal of Chemical Theory and Computation 2017, 13, 3250-3259
+
+    def __init__(self, trust_radius, gamma=0.9, n_back=5, alpha=1.0, epsilon=0.1):
         # initialize the hessian  -- > wikipedia initial guess with identity matrix
-        # cartesian coordinates x, y, z
-        self.hessian = hessian
-        self.true_hessian = False
-        if hessian is not None:
-            self.true_hessian = True
-        self.gradient = None
+
         self.d = None
-        self.positions = None
+        self.hessian = None
         self.trust_radius = trust_radius
-        self.func_values = None
-        self.gradient_func = None
         self.s = None
+        self.gradient_hold = None
+        self.func_values_hold = None
+        self.is_identity = True
+
+        # parameter for backtracking
+        self.alpha = alpha
+        self.first_iter = True
+        self.alpha_0 = self.alpha
+        self.gamma = gamma
+        self.n_back = n_back
+        self.n_0 = n_back
+        self.skip = False
+        self.epsilon = epsilon
 
     def step(self, gradient_func, func_values, *args):
-        self.gradient_func = gradient_func
-        self.func_values = func_values
+        # self.func_values = func_values
         func, gradient = gradient_func(func_values, *args)
-        if self.gradient is None:
-            self.gradient = gradient
+        if self.gradient_hold is None:
+            self.gradient_hold = gradient
+        else:
+            self.alpha, self.n_back, skip = backtracking(gradient, self.gradient_hold, self.epsilon, self.alpha,
+                                                              self.alpha_0, self.n_0, self.n_back, self.gamma)
+            if skip:
+                self.hessian = np.eye(len(func_values), len(func_values))
+                self.is_identity = True
+                return func_values
+            sigma = func_values - self.func_values_hold
+            y = -gradient + self.gradient_hold
+            roh = 1.0/np.dot(sigma, y)
+            if self.is_identity:
+                self.hessian = np.dot(y, sigma) / np.dot(y,y) * self.hessian
+                self.is_identity = False
+            A = np.eye(len(func_values), len(func_values)) - np.outer(sigma, y.T) * roh
+            B = np.eye(len(func_values), len(func_values)) - np.outer(y, sigma.T) * roh
+            self.hessian = np.dot(A, np.dot(self.hessian, B)) + np.outer(sigma, sigma.T)*roh
+
         if self.hessian is None:
             self.hessian = np.eye(len(func_values), len(func_values))
-        else:
-            if not self.true_hessian:
-                self.s = -np.dot(self.hessian, gradient)
-                alpha = 1.0
-                # alpha should be returned by a function that minimizes func(x+s*alpha) with alpha > 0
-                # should get better
-                self.d = scale_step(alpha * self.s, self.trust_radius)
-                func_values += self.d
-                func, gradient_new = gradient_func(self.func_values, *args)
+            self.is_identity = True
 
-                y = gradient_new - gradient
-                a = np.outer(self.d, self.d.T) / np.dot(self.d.T, y)
-                b = np.outer(np.dot(self.hessian, y), np.dot(self.hessian, y).T)/ np.dot(y.T, np.dot(self.hessian, y))
-                self.hessian += a - b
-            else:
-                self.s = -np.dot(self.hessian, gradient)
-                alpha = 1.0
-                # alpha should be returned by a function that minimizes func(x+s*alpha) with alpha > 0
-                # should get better
-                self.d = scale_step(alpha * self.s, self.trust_radius)
-                func_values += self.d
+        self.s = np.dot(self.hessian, gradient)
+        self.d = scale_step(self.s, self.trust_radius)
+        self.func_values_hold = func_values
+        func_values += self.alpha * self.d
 
         return func_values
-
-    def minimize(self, alpha, *args):
-        func, gradient = self.gradient_func(self.func_values + alpha * self.s, *args)
-        return func
 
