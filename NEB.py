@@ -144,7 +144,7 @@ class ImageSet(list):
     def set_positions(self, positions):
         # positions in a 3D matrix num_images x atoms x coordinates
         for ii in range(0, len(positions)):
-            self[ii].set_position(positions[ii].reshape(np.shape(self[0].position)))
+            self[ii].set_position(positions[ii].reshape(np.shape(self[0].get_current_position())))
 
     def get_positions(self):
         atoms = int(len(self[0].get_current_position())/3)
@@ -351,8 +351,8 @@ class Optimizer:
 
             if rm_rot_trans:
                 images.update_rot_Mat()
-                for ii in range(0, len(images.images)):
-                    images[ii].optimizer.update(images[ii])
+                for element in images[lower:upper]:
+                    element.optimizer.update(element)
             images.update_images(tangent_method)
 
             if freezing > 0:
