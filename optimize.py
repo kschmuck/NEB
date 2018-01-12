@@ -104,10 +104,8 @@ def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
     force_i = np.sqrt(np.dot(force_i, force_i)/len(force_j))
     force_j = np.sqrt(np.dot(force_j, force_j)/len(force_j))
     chk = force_i - force_j
-    # chk /= np.linalg.norm(force_i + force_i)
     chk /= abs(force_i+force_j)
     skip = False
-    # if chk.all() > epsilon:
     if chk > epsilon:
         alpha = alpha * gamma
         skip = True
@@ -129,7 +127,7 @@ class ConjuageGradient:
     # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization
     # Herbol, Stevenson, Clancy
     # Journal of Chemical Theory and Computation 2017, 13, 3250-3259
-    def __init__(self, trust_radius, gamma=0.1, n_back=10, alpha=.1, epsilon=0.3):
+    def __init__(self, trust_radius, gamma=0.5, n_back=10, alpha=1.0, epsilon=0.2):
         self.beta = 1.0
         self.alpha = alpha
         self.s = None
@@ -156,7 +154,7 @@ class ConjuageGradient:
             beta = np.dot(self.force.T, self.force) / np.dot(self.force_before.T, self.force_before)
             if np.isnan(beta) | np.isinf(beta):
                 beta = 1.0
-            self.s = self.force + beta * self.s
+            self.s = self.force - beta * self.s
 
         self.s *= self.alpha
         self.s = scale_step(self.s, self.trust_radius)
@@ -204,11 +202,11 @@ class BFGS:
                 self.hessian = np.eye(len(func_values), len(func_values))
                 self.is_identity = True
                 return func_values
-            sigma = func_values - self.func_values_hold
+            sigma = self.d #func_values - self.func_values_hold
             y = -gradient + self.gradient_hold
-            roh = 1.0/np.dot(sigma, y)
+            roh = 1.0/np.dot(y.T, sigma)
             if self.is_identity:
-                self.hessian = np.dot(y, sigma) / np.dot(y,y) * self.hessian
+                self.hessian = np.dot(y.T, sigma) / np.dot(y.T,y) * self.hessian
                 self.is_identity = False
             A = np.eye(len(func_values), len(func_values)) - np.outer(sigma, y.T) * roh
             B = np.eye(len(func_values), len(func_values)) - np.outer(y, sigma.T) * roh

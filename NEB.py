@@ -66,7 +66,7 @@ def rotation_geometry(positions):
     return positions, rotation_matrix_a
 
 
-def get_tangent(img_0, img_1, img_2, method='improved_energy'):
+def get_tangent(img_0, img_1, img_2, method='improved'):
     # img_i is one image
     # img_0 = image before
     # img_1 = current image, at this image the tangent is set.
@@ -99,7 +99,7 @@ def get_tangent(img_0, img_1, img_2, method='improved_energy'):
     # Journal of chemical Physics, Volume 113, number 22
     # equation: 8-11
     # energy weighted tangent, useful if energy changes rapidly between the images
-    elif method == 'improved_energy':
+    elif method == 'improved':
         def min_max(energy_0, energy_1, energy_2):
             a = abs(energy_2 - energy_1)
             b = abs(energy_0 - energy_1)
@@ -186,14 +186,14 @@ class ImageSet(list):
         for ii in range(1, len(self)):
             self[ii].rot_mat = rot_mat[ii-1]
 
-    def update_tangents(self):
+    def update_tangents(self, tangent_method):
         for ii in range(0, len(self)):
             if ii == 0:
-                self[0].tangent = get_tangent(None, self[0], self[1], method='simple_improved')
+                self[0].tangent = get_tangent(None, self[0], self[1], method=tangent_method)
             elif ii == (len(self)-1):
-                self[-1].tangent = get_tangent(self[-2], self[-1], None, method='simple_improved')
+                self[-1].tangent = get_tangent(self[-2], self[-1], None, method=tangent_method)
             else:
-                self[ii].tangent = get_tangent(self[ii - 1], self[ii], self[ii + 1], method='simple_improved')
+                self[ii].tangent = get_tangent(self[ii - 1], self[ii], self[ii + 1], method=tangent_method)
 
     def update_spring_force(self):
         for ii in range(1, len(self) - 1):
@@ -205,9 +205,9 @@ class ImageSet(list):
             element.update_energy_gradient(self.energy_gradient_func, element.d_ij_k, ii)
             ii += 1
 
-    def update_images(self):
+    def update_images(self, tangent_method):
         self.update_energy_gradient()
-        self.update_tangents()
+        self.update_tangents(tangent_method)
         self.update_spring_force()
 
     def set_optimizer(self, optimizer):
@@ -220,8 +220,10 @@ class ImageSet(list):
                 for element in self[1:-1]:
                     element.spring_constant = spring_constant
         else:
-            for element in self:
+            for element in self[1:-1]:
                 element.spring_constant = spring_constant
+        self[0].spring_constant = 0.0
+        self[1].spring_constant = 0.0
 
     def number_images_check(self):
         if len(self) < 3:
@@ -305,18 +307,17 @@ class Optimizer:
     def __init__(self): # , trust_radius, fmax
         self.fmax = None
 
-    def is_converged(self, images):
-        for element in images:
-            if not element.frozen:
-                if element.force_norm() > self.fmax:
-                    return False
+    def is_converged(self, imgs):
+        for element in imgs:
+            if element.force_norm() > self.fmax:
+                return False
         return True
 
     def get_max_force(self, images):
-        force = images[1].force_norm()
+        force = images[0].force_norm()
         jj = 1
         ii = 1
-        for element in images[2:-1]:
+        for element in images[1:]:
             f = element.force_norm()
             ii = ii + 1
             if f > force:
@@ -324,20 +325,26 @@ class Optimizer:
                 force = f
         print(str(force) + ' of image ' + str(jj+1))
 
-    def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False, freezing=False):
+    def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
+                freezing=0, tangent_method='improved'):
         self.fmax = force_max
         images.set_optimizer(optimizer)
-        if not opt_minima:
-            images[0].frozen = True
-            images[-1].frozen = True
 
         converged = False
         step = 0
         if rm_rot_trans:
             images.update_rot_Mat()
-        images.update_images()
+        images.update_images(tangent_method)
+
+        if not opt_minima:
+            lower = 1
+            upper = -1
+        else:
+            lower = 0
+            upper = len(images)+1
+
         while not converged:
-            for element in images:
+            for element in images[lower:upper]:
                 if not element.frozen:
                     opt_method = element.optimizer
                     element.set_position(opt_method.step(element.get_energy_force, element.get_current_position()))
@@ -346,18 +353,29 @@ class Optimizer:
                 images.update_rot_Mat()
                 for ii in range(0, len(images.images)):
                     images[ii].optimizer.update(images[ii])
-            images.update_images()
+            images.update_images(tangent_method)
 
-            if self.is_converged(images):
+            if freezing > 0:
+                for element in images[lower:upper]:
+                    if element.frozen:
+                        element.count_frozen -= 1
+                        if element.count_frozen < 0:
+                            element.frozen = False
+                        else:
+                            if element.force_norm() < self.fmax:
+                                element.frozen = True
+                                element.count_frozen = freezing
+
+            if self.is_converged(images[lower:upper]):
                 converged = True
                 print('converged ' + str(step))
-                for element in images[1:-1]:
+                for element in images[lower:upper]:
                     print(element.force_norm())
 
             step += 1
             if step >= max_steps:
                 print('not converged ' + str(step))
-                for element in images[1:-1]:
+                for element in images[lower:upper]:
                     print(element.force_norm())
                 break
         return images
