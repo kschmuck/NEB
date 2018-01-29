@@ -121,7 +121,7 @@ def backtracking(force_i, force_j, epsilon, alpha, alpha_0, n_0, n_back, gamma):
                 alpha = alpha / gamma
     return alpha, n_back, skip
 
-
+# Backtracking is not working correctly, depends very strong on the parameters
 class ConjuageGradient:
     # special case of CG with backtracking and no line search, thus evaluation of the force is very expensive
     # algorithm: cite: Computational Implementation of Nudged Elastic Band, Rigid Rotation and Corresponding Force Optimization

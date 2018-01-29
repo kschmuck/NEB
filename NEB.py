@@ -1,14 +1,7 @@
-# from ethane_PES import energy_and_gradient
-# from HNCPES import energy_and_gradient
-# from Au55Ni import energy_and_gradient
 import numpy as np
 import copy
-import xyz_file_writer as xyz_writer
-# import sympy.geometry as sym_geom
-# import sympy as sym
 from optimize import SteepestDecent, Verlete, Fire, ConjuageGradient, BFGS
 import time
-from data_reader_writer import Reader, Writer
 
 ''' creation of the image positions --> class images '''
 def create_images(product, reactant, number_of_images):
@@ -170,6 +163,7 @@ class ImageSet(list):
         for ii in range(0, len(self)):
             positions[ii, :] = self[ii].get_current_position()
         return positions
+
 
     def get_image_gradient_2Darray(self):
         force = np.zeros([len(self), len(self[0].get_current_gradient())])
