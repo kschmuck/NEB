@@ -6,7 +6,7 @@ import scipy.optimize._minimize as spmin
 
 def euclidean_distance(x, y):
     xx = np.sum(x**2, axis=1).reshape(-1, 1)
-    yy= np.sum(yy, axis=1).reshape(1, -1)
+    yy = np.sum(y**2, axis=1).reshape(1, -1)
     xy = 2.0*np.dot(x, y.T)
     squared_distance = xx + yy - xy
     return squared_distance
@@ -17,6 +17,7 @@ class SVM:
         self.epsilon = epsilon
         self.b = None
         self.alpha = None
+        self.support_index = None
 
         self.target = None
         self.input_value = None
@@ -46,12 +47,13 @@ class SVM:
         res = spmin.minimize(dual_func, np.zeros(n_samples*2), method='SLSQP', constraints=constrains)
 
         self.alpha = res.x[::2]-res.x[1::2]
+        self.support_index = np.arange(0, n_samples, 1, dtype=int)[np.abs(self.alpha) > 10**-8]
         # TODO calculating b --> is not relevant for the NEB run
         self.b = 0.0
 
     def predict_scipy(self, predict_value):
-        kernel = self.kernel.kernel(self.input_value, predict_value)
-        prediction = np.dot(self.alpha, kernel) + self.b
+        kernel = self.kernel.kernel(self.input_value[self.support_index], predict_value)
+        prediction = np.dot(self.alpha[self.support_index], kernel) + self.b
         return prediction
 
 
