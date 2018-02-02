@@ -164,7 +164,6 @@ class ImageSet(list):
             positions[ii, :] = self[ii].get_current_position()
         return positions
 
-
     def get_image_gradient_2Darray(self):
         force = np.zeros([len(self), len(self[0].get_current_gradient())])
         for ii in range(0, len(self)):
