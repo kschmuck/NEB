@@ -2,7 +2,7 @@ import tensorflow as tf
 import NEB as neb
 import numpy as np
 import optimize as opt
-# from pes import gradient, energy, energy_gradient, energy_xy_list, gradient_xy_list
+from pes import gradient, energy, energy_gradient, energy_xy_list, gradient_xy_list
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import SVM as sv
@@ -10,136 +10,119 @@ import sklearn as sk
 from sklearn import svm
 
 
-def energy(x):
-    return np.sin(x) + 1
+def energy_1D(x):
+    # return np.sinc(x)
+    return np.sin(x) +0# 10
 
 
-def gradient(x):
+def gradient_1D(x):
+    # return np.cos(x)/x+np.sinc(x)/x
     return np.cos(x)
 
+# Todo simple test
+# Todo rls test
+# Todo test all for only y, only y_prime and both in 1D and 2D
+# Todo test NEB pes surface
+# Todo test NEB with real molecule
+# Todo Clean up
 
-# number_of_images = 10
-# k = 10**-1# idpp: 10**-10 #10**-6
-# delta_t_fire = 3.5 #3.5
-# delta_t_verlete = 0.2## #0.2
-# force_max = 0.1
-# max_steps = 200
-# epsilon = 0.01 #00001
-# trust_radius = 0.05 #.1
-#
-# minima_a = np.array([3, 1])
-# minima_b = np.array([-2, 2])
-# images = neb.create_images(minima_a, minima_b, number_of_images)
-# images = neb.ImageSet(images)
-# energy_grad_func = energy_gradient
-# images.energy_gradient_func = energy_grad_func
-#
-# images.update_images('improved')
-# data_vector = images.get_image_position_2D_array()
-# #
-# target_vector = np.array(images.get_image_energy_list())
-gamma = 0.4#0.1
-epsilon = 0.001
-test_derivative = sv.SVM(epsilon=epsilon, epsilon_beta=0.001, gamma=gamma)
-test_simple = sv.SVM(epsilon=epsilon, gamma=gamma)
+gamma = 0.1
+epsilon = 0.1
+method = ['simple', 'irwls', 'rls']
+# method = ['simple']
+sv_test = []
+for element in method:
+     sv_test.append(sv.SVM(kernel='rbf', method=element, gamma=gamma, epsilon=epsilon, epsilon_beta=epsilon))
 sk_test = svm.SVR(kernel='rbf', gamma=gamma, epsilon=epsilon)
-#
-#
-# xx, yy = np.meshgrid(np.linspace(-3., 3., 5), np.linspace(-3., 3., 5))
-# xy = np.concatenate([xx.reshape(-1, 1), yy.reshape(-1, 1)], axis=1)
-# xy = images.get_image_position_2D_array()
-# test.fit(data_vector, target_vector.reshape(-1, 1))
 
-# x = np.array([np.linspace(np.pi, 1.8*np.pi,3), np.linspace(-np.pi, -1.8*np.pi, 3), np.linspace(2.5*np.pi, 3.8*np.pi,3)])
-x = (np.random.rand(4)-1)*np.pi*4
+x = np.array([np.linspace(np.pi, 1.8*np.pi,3), np.linspace(-np.pi, -1.8*np.pi, 3), np.linspace(2.5*np.pi, 3.8*np.pi,3)])
+# x = (np.random.rand(4)-1)*np.pi*6
 # x = np.array([1,3,-2])#*0.3+1.5
-
 # x = np.array([np.linspace(-2, -1, 2),np.linspace(1, 2, 2)])
+x = x.reshape(-1, 1)
+x_predict = np.linspace(-5*np.pi, 8*np.pi, 300).reshape(-1,1)
 
-test_derivative.fit(x.reshape(-1,1), np.array(energy(x)).reshape(-1, 1), derivative_target=np.array(gradient(x).reshape(-1,1)), D=10., C=10.)#
-test_simple.fit(x.reshape(-1,1), np.array(energy(x).reshape(-1,1)), C=10.)
-sk_test.fit(x.reshape(-1,1), np.array(energy(x)).reshape(-1))
+c1 = 1.
+c2 = 1.
 
-x_pred = np.linspace(-5*np.pi, 5*np.pi, 200)
+sk_test.fit(x, energy_1D(x).reshape(-1))
 
-values_derivative = test_derivative.predict_derivative(x_pred.reshape(-1,1))
-values = test_derivative.predict(x_pred.reshape(-1,1))-values_derivative
+sv_val = []
+sk_val = sk_test.predict(x_predict)
 
-values_simple = test_simple.predict(x_pred.reshape(-1,1))
-sk_values = sk_test.predict(x_pred.reshape(-1,1))
+for element in sv_test:
+    # element.fit(x, energy_1D(x).reshape(-1), C1=c1, C2=c2) # np.zeros([0,1]), np.zeros(0), x_prime=x, y_prime=gradient_1D(x).reshape(-1)
+    # element.fit(np.zeros([0,1]), np.zeros(0), x_prime=x, y_prime=gradient_1D(x).reshape(-1), C1=c1, C2=c2)
+    element.fit(x, energy_1D(x).reshape(-1), x_prime=x, y_prime=gradient_1D(x).reshape(-1, 1), C1=c1, C2=c2)
+    sv_val.append(element.predict(x_predict))
 
-
+color = ['r', 'b', 'g']
 fig = plt.figure()
-plt.plot(x_pred, energy(x_pred), label='true', color='b')
-# plt.plot(x_pred, values_derivative, label='derivative method: derivative')
-plt.plot(x_pred, values_simple, label='method: simple',ls='--', color='r')
-plt.plot(x_pred, sk_values, label='predicted scikit', ls='--', color='k')
-# plt.plot(x_pred, values, label='function values method: derivative')
-plt.plot(x_pred, values+values_derivative, label='method: derivative', ls='--', color='g')
-plt.plot(x, energy(x), marker='o', ls='None', color='k')
+plt.plot(x_predict, energy_1D(x_predict), ls='--', color='k', label='True Path')
+plt.plot(x, energy_1D(x), ls='None', color='k', marker='o', label='Training Points')
+for ii in range(len(sv_test)):
+    plt.plot(x_predict, sv_val[ii], color=color[ii], label=method[ii])
+plt.plot(x_predict, sk_val, color='y', label='scikit')
 plt.legend()
+plt.show()
+
+########################################################################################################################
+########################################################################################################################
+# ########################################################################################################################
+n = 3
+grid = 3.
+xx, yy = np.meshgrid(np.linspace(-grid, grid, n), np.linspace(-grid, grid, n))
+xy = np.concatenate([xx.reshape(-1,1),yy.reshape(-1,1)], axis=1)
+
+n_pred = 20
+grid_pred = 7.5
+xx_pred, yy_pred = np.meshgrid(np.linspace(-grid_pred, grid_pred, n_pred), np.linspace(-grid_pred, grid_pred, n_pred))
+xy_pred = np.concatenate([xx_pred.reshape(-1,1), yy_pred.reshape(-1,1)], axis=1)
+
+c1 = 1.
+c2 = 1.
+gamma = 0.1
+epsilon = 0.1
+# method = 'irwls'
+sv_val_2d = []
+sv_test_2d = []
+for element in method:
+    sv_test_2d.append(sv.SVM(kernel='rbf', method=element, gamma=gamma, epsilon=epsilon, epsilon_beta=epsilon))
+sk_test_2d = svm.SVR(kernel='rbf', gamma=gamma, epsilon=epsilon)
+##
+sk_test_2d.fit(xy, energy(xx, yy).reshape(-1))
+grad_x, grad_y = gradient(xx, yy)
+grad = np.concatenate([grad_x.reshape(-1,1), grad_y.reshape(-1, 1)], axis=1)
+
+for element in sv_test_2d:
+    element.fit(xy, energy(xx, yy).reshape(-1), C1=c1, C2=c2) # np.zeros([0,2]), np.zeros(0), x_prime=xy, y_prime=grad
+    sv_val_2d.append(element.predict(xy_pred).reshape(-1,n_pred))
+
+sk_val_2d = sk_test_2d.predict(xy_pred)
 
 
-fig_2 = plt.figure()
-ax = fig_2.add_subplot(3,1,1)
-ax.plot(x_pred, energy(x_pred), label='true', color='r')
-ax.plot(x, energy(x), marker='o', ls='None', color='k')
-ax.plot(x_pred, values_derivative, label='derivative method: derivative', color='g')
-# ax.plot(x_pred, gradient(x_pred), label='cos', ls='--')
+alpha = 0.8
+fig_2d = plt.figure()
+ax_2d_a = fig_2d.add_subplot(221, projection='3d')
+ax_2d_a.plot_surface(xx_pred, yy_pred, energy(xx_pred, yy_pred), label='True')
+ax_2d_a.plot_wireframe(xx_pred, yy_pred, sk_val_2d.reshape(-1,n_pred), label='scikit', color='g', alpha=alpha)
+plt.title('scikit')
+# ax_2d_a.scatter(xx, yy, energy(xx, yy), color='k')
 
-# d_x = test_derivative.predict_derivative(x.reshape(-1,1)) + x
-# dx_true = x+gradient(x)
-# for ii in range(0, len(x)):
-#     ax.arrow(x[ii], energy(x[ii]), d_x[ii], energy(d_x[ii]), head_width=0.25, head_length=0.25, color='r', label='predicted gradient')
-#     ax.arrow(x[ii], energy(x[ii]), dx_true[ii], energy(dx_true[ii]), head_width=0.25, head_length=0.25, color='k', label='true gradient')
-# ax.legend()
+ax_2d_b = fig_2d.add_subplot(222, projection='3d')
+ax_2d_b.plot_surface(xx_pred, yy_pred, energy(xx_pred, yy_pred), label='True')
+ax_2d_b.plot_wireframe(xx_pred, yy_pred, sv_val_2d[0], label=method,  color='r', alpha=alpha)
+plt.title(method[0])
+# ax_2d_b.scatter(xx, yy, energy(xx, yy), color='k')
 
-ax_2 = fig_2.add_subplot(3,1,2)
-ax_2.plot(x_pred, values, label='function values method: derivative', color='g')
-ax_2.plot(x_pred, values_simple, label='method: simple', color='r')
-ax_2.plot(x, energy(x), marker='o', ls='None', color='k')
-ax_2.plot(x_pred, energy(x_pred), label='true', color='b')
-ax_2.legend()
+ax_2d_c = fig_2d.add_subplot(223, projection='3d')
+ax_2d_c.plot_surface(xx_pred, yy_pred, energy(xx_pred, yy_pred), label='True')
+ax_2d_c.plot_wireframe(xx_pred, yy_pred, sv_val_2d[1], label=method,  color='y', alpha=alpha)
+plt.title(method[1])
 
-ax_3 = fig_2.add_subplot(3,1,3)
-ax_3.plot(x_pred, values+values_derivative, label='derivative+function values method: derivative', color='g')
-ax_3.plot(x_pred, energy(x_pred), label='true', color='b')
-ax_3.plot(x, energy(x), marker='o', ls='None', color='k')
+ax_2d_d = fig_2d.add_subplot(224, projection='3d')
+ax_2d_d.plot_surface(xx_pred, yy_pred, energy(xx_pred, yy_pred), label='True')
+ax_2d_d.plot_wireframe(xx_pred, yy_pred, sv_val_2d[2], label=method,  color='k', alpha=alpha)
+plt.title(method[2])
 
-ax_3.legend()
-
-plt.plot(x_pred, sk_values)
-
-
-# ax = fig.add_subplot(311, projection='3d')
-# ax.plot_surface(xx, yy, energy(xx, yy))
-# # ax.plot_surface(xx, yy, values.reshape(len(xx),-1))
-# ax.plot_wireframe(xx, yy, values.reshape(len(xx),-1), color='r')
-# # ax = fig.add_subplot(111, projection='3d')
-# # ax.plot_surface(xx, yy, sk_values.reshape(len(xx),-1))
-# # ax.plot_wireframe(xx, yy, sk_values.reshape(len(xx),-1), color='g')
-#
-# ax3 = fig.add_subplot(3,1,2, projection='3d')
-# ax3.plot_wireframe(xx, yy, sk_values.reshape(len(xx),-1), color='g')
-# ax3.plot_wireframe(xx, yy, values.reshape(len(xx),-1), color='r')
-
-# n = 50
-# const_xx = np.linspace(-5, 5, n)
-# # const_yy = np.zeros(n)+minima_a[1]#np.linspace(-5, 5, n)
-# # vary = np.linspace(-4, 4, n)
-# xy = np.concatenate([const_xx.reshape(-1,1), const_yy.reshape(-1,1)], axis=1)
-# ax1 = fig.add_subplot(3, 1, 3)
-# ax1.plot(const_xx, energy(const_xx, const_yy), label='True')
-# ax1.plot(const_xx, test.predict(xy), label='with Gradient', color= 'r')
-#
-# # const_xx = np.linspace(minima_a[0], minima_b[0], n)
-# # const_yy = np.linspace(minima_a[1], minima_b[1], n)
-# # ax2 = fig.add_subplot(3, 1, 3)
-# # ax2.plot(const_xx, test.predict(xy), label='with Gradient ypath minima', color= 'r')
-# # ax2.plot(const_xx, energy(const_xx, const_yy), label='True')
-#
-# ax1.plot(const_xx, sk_test.predict(xy), label='Scikitlearn', color='g')
-# ax1.legend()
-
-# plt.show()
-# #
+plt.show()
