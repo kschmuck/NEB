@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.optimize._minimize as spmin
-
+import matplotlib.pyplot as plt
 
 class SVM:
     def __init__(self, epsilon=0.1, epsilon_beta=0.1, kernel='rbf', gamma=0.1, method='rls'):
@@ -27,7 +27,9 @@ class SVM:
             self.kernel = RBF(gamma=gamma)
 
         self.method = method
-        self._is_fitted= False
+        self._is_fitted = False
+
+        self.debug_mat = None
 
     def predict_derivative(self, x):
         if not self._is_fitted:
@@ -77,8 +79,9 @@ class SVM:
             self.n_samples_prime = len(y_prime)
 
         if self.method == 'irwls':
-            self._fit_irwls(C1=C1, C2=C2) #x, y, x_prime=x_prime, y_prime=y_prime,
+            y_debug = self._fit_irwls(C1=C1, C2=C2)
             self._is_fitted = True
+            return y_debug
         elif self.method == 'rls':
             self._fit_rls(C1=C1, C2=C2)
             self._is_fitted = True
@@ -91,173 +94,182 @@ class SVM:
         else:
             raise NotImplementedError('Method is not implemented use irwls, rls or simple')
 
+# Todo irwls fit convergence criteria, and test if epsilon = 0 and epsilon_beta = 0
+# Todo irwls fit d_a and d_s inversion
+
     def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4):
+
         def calc_weight(weight, error, constant):
-            weight[error <= 0] = 0
-            weight[error > 0] = 2 * constant / error[error > 0]
+            weight[error < 0.] = 0.
+            weight[error == 0.] = constant
+            weight[error > 0.] = constant / error[error > 0.]
             return weight
+
+        def error_function(alpha_, beta_, b_):
+            func_error = np.zeros(self.n_samples*2)
+            grad_error = np.zeros(self.n_samples_prime*self.dim*2)
+            func_error[::2] = k.T.dot(alpha_) + k_.T.dot(beta_) + b_ - self.y - self.epsilon
+            func_error[::2] = -k.T.dot(alpha_) - k_.T.dot(beta_) - b_ + self.y - self.epsilon
+            grad_error[::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
+            grad_error[::2] = -g.T.dot(alpha_) + j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
+            return func_error, grad_error
+
+        def lagrangian(alpha_, beta_, func_error, grad_error):
+            return 1 / 2 * (alpha_.T.dot(k.dot(alpha_)) + alpha_.T.dot(g.dot(beta_)) + beta_.T.dot(k_.dot(alpha_))
+                            + (beta_.T.dot(j.dot(beta_))) + C1 * np.sum(func_error[func_error > 0])
+                            + C2 * np.sum(grad_error[grad_error > 0]))
 
         k, g, k_, j = self._create_mat()
 
-        step = 0
-        converged = False
+        a = np.zeros(self.n_samples * 2)
+        s = np.zeros(self.n_samples_prime*self.dim*2)
 
-        a = np.zeros(self.n_samples)
-        a_star = np.zeros(self.n_samples)
-        s = np.zeros(self.n_samples_prime*self.dim)
-        s_star = np.zeros(self.n_samples_prime*self.dim)
-
-        a[1::2] = C1
-        s[1::2] = C2
-        a_star[::2] = C1
-        s_star[::2] = C2
+        a[1:self.n_samples:2] = C1
+        a[self.n_samples::2] = C1
+        s[1:self.n_samples_prime*self.dim:2] = C2
+        s[self.n_samples_prime*self.dim::2] = C2
 
         support_index_alpha = np.arange(0, self.n_samples, 1)
         support_index_beta = np.arange(0, self.n_samples_prime * self.dim, 1)
 
-        if self.n_samples == 0:
-            length_mat = self.n_samples + self.n_samples_prime * self.dim
-            mat = j
+        size_mat = self.n_samples + self.n_samples_prime*self.dim + 1
+        mat = np.zeros([size_mat, size_mat])
 
-            while not converged:
-                index_s = np.logical_or(s > 0., s_star > 0.)
-                self.support_index_beta = support_index_beta[index_s]
+        mat[:self.n_samples, :self.n_samples] = k
+        mat[:self.n_samples, self.n_samples:-1] = g
+        mat[self.n_samples:-1, :self.n_samples] = k_
+        mat[self.n_samples:-1, self.n_samples:-1] = j
+        mat[:self.n_samples, -1] = 1.
+        mat[-1, :self.n_samples] = 1.
 
-                idx = np.logical_and(np.tile(index_s, length_mat).reshape(length_mat, length_mat),
-                                     np.tile(index_s, length_mat).reshape(length_mat, length_mat).T)
+        step = 1
+        converged = False
+        alpha = np.zeros(self.n_samples)
+        beta = np.zeros(self.n_samples_prime * self.dim)
+        b = 0
 
-                mat_calc = mat[idx].reshape(len(self.support_index_beta), len(self.support_index_beta))
+        x_predict = np.linspace(-8 * np.pi, 8 * np.pi, 300).reshape(-1, 1)
+        debug_y = []
 
-                s_ = s[self.support_index_beta]
-                s_star_ = s_star[self.support_index_beta]
-                d_s = np.linalg.inv(np.eye(len(self.support_index_beta)) * (s_ + s_star_))
+        eta = 0.1
+        f_error = np.ones(self.n_samples*2)/2
+        g_error = np.ones(self.n_samples_prime*self.dim*2)/2
 
-                mat_calc += d_s
-                y_ = self.y_prime.flatten()[self.support_index_beta] + (s_ - s_star_) / (s_ + s_star_) * self.epsilon_beta
+        a_add_y = np.ones(self.n_samples * 2) * self.epsilon
+        a_add_y[1::2] *= -1
+        s_add_y = np.ones(self.n_samples_prime * self.dim * 2) * self.epsilon_beta
+        s_add_y[1::2] *= -1
 
-                vec = np.linalg.inv(mat_calc).dot(y_)
+        while not converged:
 
-                beta = np.zeros(self.n_samples_prime * self.dim)
+            idx_f_error = f_error > 0.
+            idx_g_error = g_error > 0.
 
-                beta[self.support_index_beta] = vec
+            f_err = np.zeros(f_error.shape)
+            f_err[idx_f_error] = f_error[idx_f_error]
+            f_err = f_err[::2] + f_err[1::2]
 
-                d = mat[self.n_samples:, self.n_samples:].T.dot(beta) - self.y_prime.flatten() - self.epsilon_beta
-                d_star = -mat[self.n_samples:, self.n_samples:].T.dot(beta) + self.y_prime.flatten() - self.epsilon_beta
+            g_err = np.zeros(g_error.shape)
+            g_err[idx_g_error] = g_error[idx_g_error]
+            g_err = g_err[::2] + g_err[1::2]
 
-                if step > 1:
-                    if error_d < d.dot(d) and error_d_star < d_star.dot(d_star):
-                        converged = True
-                        print('converged')
-                error_d = d.dot(d)
-                error_d_star = d_star.dot(d_star)
+            # index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
+            # index_s = np.logical_or(s[:self.n_samples_prime*self.dim] > 0., s[self.n_samples_prime*self.dim:] > 0.)
 
-                s = calc_weight(s, d, C2)
-                s_star = calc_weight(s_star, d_star, C2)
+            index_a = np.logical_or(idx_f_error[::2], idx_f_error[1::2])
+            index_s = np.logical_or(idx_g_error[::2], idx_g_error[1::2])
 
-                step += 1
-                if step > max_iter:
-                    break
-            b = 0.
-            alpha = np.zeros(self.n_samples)
-            index_a = np.logical_or(a > 0., a_star > 0.)
+            # a_ = a[:self.n_samples][index_a]
+            # a_star_ = a[self.n_samples:][index_a]
+            # s_ = s[:self.n_samples_prime*self.dim][index_s]
+            # s_star_ = s[self.n_samples_prime*self.dim:][index_s]
 
-        else:
-            length_mat = self.n_samples + self.n_samples_prime * self.dim + 1
-            mat = np.zeros([length_mat, length_mat])
-            mat[:self.n_samples, -1] = 1.
-            mat[-1, :self.n_samples] = 1.
+            idx_alpha = support_index_alpha[index_a]
+            idx_beta = support_index_beta[index_s]
 
-            if self.n_samples_prime == 0:
-                mat[:-1, :-1] = k
-            else:
-                mat[:self.n_samples, :self.n_samples] = k
-                mat[:self.n_samples, self.n_samples:-1] = g
-                mat[self.n_samples:-1, :self.n_samples] = k_
-                mat[self.n_samples:-1, self.n_samples:-1] = j
+            # d_a = np.linalg.inv(
+            #     np.eye(len(idx_alpha)) * (a_ + a_star_))  # *(e + e_star)[self.support_index_alpha]/C1
+            # d_s = np.linalg.inv(
+            #     np.eye(len(idx_beta)) * (s_ + s_star_))  # (d + d_star)[self.support_index_beta]/C2
+            d_a = np.eye(len(idx_alpha)) * f_err[idx_alpha]/C1
+            d_s = np.eye(len(idx_beta)) *g_err[idx_beta]/C2
 
-            while not converged:
-                index_a = np.logical_or(a > 0., a_star > 0.)
-                self.support_index_alpha = support_index_alpha[index_a]
+            index = np.logical_and(np.tile(np.concatenate([index_a, index_s, np.array([1])]), size_mat)
+                                   .reshape(size_mat, size_mat),
+                                   np.tile(np.concatenate([index_a, index_s, np.array([1])]), size_mat)
+                                   .reshape(size_mat, size_mat).T)
 
-                index_s = np.logical_or(s > 0., s_star > 0.)
-                self.support_index_beta = support_index_beta[index_s]
+            calc_mat = mat[index].reshape(len(idx_alpha)+len(idx_beta) + 1, len(idx_alpha)+len(idx_beta) + 1)
 
-                index = np.concatenate([index_a, index_s, np.array([1])])
-                idx = np.logical_and(np.tile(index, length_mat).reshape(length_mat,length_mat),
-                                     np.tile(index, length_mat).reshape(length_mat, length_mat).T)
+            if len(idx_alpha) == 0:
+                # to avoid the singularity if just derivatives occour as support vectors
+                calc_mat[-1, -1] = 1
+                print('avoid singularity ' + str(step))
 
-                mat_calc = mat[idx].reshape(len(self.support_index_alpha) + len(self.support_index_beta) + 1,
-                                            len(self.support_index_alpha) + len(self.support_index_beta) + 1)
+            calc_mat[:len(idx_alpha), :len(idx_alpha)] += d_a
+            calc_mat[len(idx_alpha):-1, len(idx_alpha):-1] += d_s
 
-                a_ = a[self.support_index_alpha]
-                a_star_ = a_star[self.support_index_alpha]
-                s_ = s[self.support_index_beta]
-                s_star_ = s_star[self.support_index_beta]
+            # y_ = np.concatenate([self.y[idx_alpha] + (a_ - a_star_) / (a_ + a_star_) * self.epsilon,
+            #                      self.y_prime.flatten()[idx_beta] + (s_ - s_star_) / (s_ + s_star_) * self.epsilon_beta,
+            #                      np.array([0])])
+            y_ = np.concatenate([self.y[idx_alpha] + a_add_y[idx_alpha], self.y_prime.flatten()[idx_beta] + s_add_y[idx_beta], np.array([0])])
 
-                d_a = np.linalg.inv(np.eye(len(self.support_index_alpha))*(a_ + a_star_))
-                d_s = np.linalg.inv(np.eye(len(self.support_index_beta))*(s_ + s_star_))
+            vec_ = np.linalg.inv(calc_mat).dot(y_)
 
-                mat_calc[:len(self.support_index_alpha), :len(self.support_index_alpha)] += d_a
-                mat_calc[len(self.support_index_alpha):-1, len(self.support_index_alpha):-1] += d_s
+            alpha_s = np.zeros(self.n_samples)
+            alpha_s[idx_alpha] = vec_[:len(idx_alpha)]
+            beta_s = np.zeros(self.n_samples_prime*self.dim)
+            beta_s[idx_beta] = vec_[len(idx_alpha):-1]
+            b_s = vec_[-1]
 
-                y_ = np.concatenate([self.y[self.support_index_alpha] + (a_ - a_star_) / (a_ + a_star_) * self.epsilon,
-                                     self.y_prime.flatten()[self.support_index_beta] + (s_ - s_star_) / (
-                                         s_ + s_star_) * self.epsilon_beta, np.array([0])])
+            alpha += (-alpha+alpha_s)*eta
+            beta += (-beta+beta_s)*eta
+            b += (-b+b_s)*eta
 
-                vec = np.linalg.inv(mat_calc).dot(y_)
+            f_error, g_error = error_function(alpha, beta, b)
+            f_error_s, g_error_s = error_function(alpha_s, beta_s, b_s)
+            if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
+                alpha = alpha_s
+                beta = beta_s
+                b = b_s
 
-                alpha = np.zeros(self.n_samples)
-                alpha[self.support_index_alpha] = vec[:len(self.support_index_alpha)]
-                beta = np.zeros(self.n_samples_prime*self.dim)
+            # a[:self.n_samples] = calc_weight(a[:self.n_samples], f_error[:self.n_samples], C1)
+            # a[self.n_samples:] = calc_weight(a[self.n_samples:], f_error[self.n_samples:], C1)
+            # s[:self.n_samples_prime*self.dim] = calc_weight(s[:self.n_samples_prime*self.dim], g_error[:self.n_samples_prime*self.dim], C2)
+            # s[self.n_samples_prime*self.dim:] = calc_weight(s[self.n_samples_prime*self.dim:], g_error[self.n_samples_prime*self.dim:], C2)
 
-                if self.n_samples != 0:
-                    beta[self.support_index_beta] = vec[len(self.support_index_alpha):-1]
-                    b = vec[-1]
+            if step > 1:
+                # if np.less(abs(alpha - self.alpha), 10 ** -4).all():
+                #     print(step)
 
-                    e = mat[:self.n_samples, :self.n_samples].T.dot(alpha) + mat[self.n_samples:-1, :self.n_samples].T.dot(beta) \
-                        + b - self.y - self.epsilon
-                    e_star = self.y - mat[:self.n_samples, :self.n_samples].T.dot(alpha) \
-                             - mat[self.n_samples:-1, :self.n_samples].T.dot(beta) - b - self.epsilon
-                    d = mat[:self.n_samples, self.n_samples:-1].T.dot(alpha) \
-                        + mat[self.n_samples:-1, self.n_samples:-1].T.dot(beta) - self.y_prime.flatten() - self.epsilon_beta
-                    d_star = -mat[:self.n_samples, self.n_samples:-1].T.dot(alpha) \
-                             - mat[self.n_samples:-1, self.n_samples:-1].T.dot(beta) + self.y_prime.flatten() - self.epsilon_beta
-                if step > 1:
+                if np.less(abs(alpha - self.alpha), 10**-4).all() and np.less(abs(beta - self.beta), 10**-4).all() and abs(b - self.intercept) < 10**-4:
+                    converged = True
+                    print('converged ' + str(step))
+            idx_beta = idx_beta.reshape(-1, self.dim)
 
-                    if self.n_samples != 0 and self.n_samples_prime != 0:
-                        if error_e < e.dot(e) and error_e_star < e_star.dot(e_star) \
-                                and error_d < d.dot(d) and error_d_star < d_star.dot(d_star):
-                            converged = True
-                            print('converged')
-                    elif self.n_samples != 0:
-                        if error_e < e.dot(e) and error_e_star < e_star.dot(e_star):
-                            converged = True
-                            print('converged')
+            self.support_index_alpha = support_index_alpha[idx_alpha]
+            self.support_index_beta = []
+            for ii in range(self.dim):
+                self.support_index_beta.append(support_index_beta[idx_beta[:, ii]])
 
-                error_e = e.dot(e)
-                error_e_star = e_star.dot(e_star)
-                error_d = d.dot(d)
-                error_d_star = d_star.dot(d_star)
+            # if step < 20:
+            #     # if (step % 100) == 0:
+            #     debug_y.append(self.predict(x_predict))
 
-                a = calc_weight(a, e, C1)
-                a_star = calc_weight(a_star, e_star, C1)
-                s = calc_weight(s, d, C2)
-                s_star = calc_weight(s_star, d_star, C2)
+            if step >= max_iter:
+                print('iteration is not converged ' + str(step))
+                print(abs(alpha - self.alpha))
+                print(abs(beta - self.beta))
+                print(abs(b - self.intercept))
+                break
+            step += 1
 
-                step += 1
-                if step > max_iter:
-                    break
+            self.alpha = alpha
+            self.beta = beta
+            self.intercept = b
 
-        self.alpha = alpha
-        self.beta = beta.reshape(-1, self.dim)
-        self.intercept = b
-
-        index_s = index_s.reshape(-1, self.dim)
-
-        self.support_index_alpha = np.arange(0, self.n_samples, 1)[index_a]
-        self.support_index_beta = []
-        for ii in range(self.dim):
-            self.support_index_beta.append(np.arange(0, self.n_samples_prime, 1)[index_s[:,ii]])
+        self.beta = self.beta.reshape(-1, self.dim)
+        return debug_y
 
     def _fit_rls(self, C1=1.0, C2=1.0):
 
@@ -274,14 +286,15 @@ class SVM:
         else:
             mat = np.zeros([self.n_samples + self.n_samples_prime * self.dim + 1,
                             self.n_samples + self.n_samples_prime * self.dim + 1])
-            mat[:self.n_samples, self.n_samples:-1] = k_
+            mat[:self.n_samples, self.n_samples:-1] = g
             mat[self.n_samples:-1, self.n_samples:-1] = j
             mat[:self.n_samples, :self.n_samples] = k
-            mat[self.n_samples:-1, :self.n_samples] = g
+            mat[self.n_samples:-1, :self.n_samples] = k_
             mat[-1, :self.n_samples] = 1.
             mat[:self.n_samples, -1] = 1.
 
         # ToDo: Implement partition scheme for inverting the matrix
+
         matinv = np.linalg.inv(mat)
 
         if self.n_samples != 0:
@@ -291,6 +304,7 @@ class SVM:
 
         a_b = matinv.dot(y_vec)
         self.alpha = a_b[:self.n_samples]
+
         if self.n_samples != 0:
             self.beta = a_b[self.n_samples:-1].reshape((self.dim, -1)).T
             self.intercept = a_b[-1]
