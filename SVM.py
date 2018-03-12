@@ -103,8 +103,9 @@ class SVM:
 
     def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4):
 
-        def calc_weight(weight, error, constant):
-            weight[error < 0.] = 0.
+        def calc_weight(error, constant):
+            weight = np.zeros(error.shape)
+            # weight[error < 0.] = 0.
             weight[error == 0.] = constant
             weight[error > 0.] = constant / error[error > 0.]
             return weight
@@ -113,9 +114,9 @@ class SVM:
             func_error = np.zeros(self.n_samples*2)
             grad_error = np.zeros(self.n_samples_prime*self.dim*2)
             func_error[::2] = k.T.dot(alpha_) + k_.T.dot(beta_) + b_ - self.y - self.epsilon
-            func_error[::2] = -k.T.dot(alpha_) - k_.T.dot(beta_) - b_ + self.y - self.epsilon
+            func_error[1::2] = -k.T.dot(alpha_) - k_.T.dot(beta_) - b_ + self.y - self.epsilon
             grad_error[::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
-            grad_error[::2] = -g.T.dot(alpha_) + j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
+            grad_error[1::2] = -g.T.dot(alpha_) + j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
             return func_error, grad_error
 
         def lagrangian(alpha_, beta_, func_error, grad_error):
@@ -156,32 +157,11 @@ class SVM:
         debug_y = []
 
         eta = 1.
-        # f_error = np.ones(self.n_samples*2)/2
-        # g_error = np.ones(self.n_samples_prime*self.dim*2)/2
-
-        # a_add_y = np.ones(self.n_samples * 2) * self.epsilon
-        # a_add_y[1::2] *= -1
-        # s_add_y = np.ones(self.n_samples_prime * self.dim * 2) * self.epsilon_beta
-        # s_add_y[1::2] *= -1
 
         while not converged:
 
-            # idx_f_error = f_error > 0.
-            # idx_g_error = g_error > 0.
-            #
-            # f_err = np.zeros(f_error.shape)
-            # f_err[idx_f_error] = f_error[idx_f_error]
-            # f_err = f_err[::2] + f_err[1::2]
-            #
-            # g_err = np.zeros(g_error.shape)
-            # g_err[idx_g_error] = g_error[idx_g_error]
-            # g_err = g_err[::2] + g_err[1::2]
-
             index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
             index_s = np.logical_or(s[:self.n_samples_prime*self.dim] > 0., s[self.n_samples_prime*self.dim:] > 0.)
-
-            # index_a = np.logical_or(idx_f_error[::2], idx_f_error[1::2])
-            # index_s = np.logical_or(idx_g_error[::2], idx_g_error[1::2])
 
             a_ = a[:self.n_samples][index_a]
             a_star_ = a[self.n_samples:][index_a]
@@ -191,12 +171,8 @@ class SVM:
             idx_alpha = support_index_alpha[index_a]
             idx_beta = support_index_beta[index_s]
 
-            d_a = np.linalg.inv(
-                np.eye(len(idx_alpha)) * (a_ + a_star_))  # *(e + e_star)[self.support_index_alpha]/C1
-            d_s = np.linalg.inv(
-                np.eye(len(idx_beta)) * (s_ + s_star_))  # (d + d_star)[self.support_index_beta]/C2
-            # d_a = np.eye(len(idx_alpha)) * f_err[idx_alpha]/C1
-            # d_s = np.eye(len(idx_beta)) *g_err[idx_beta]/C2
+            d_a = np.linalg.inv(np.eye(len(idx_alpha)) * (a_ + a_star_))  # *(e + e_star)[self.support_index_alpha]/C1
+            d_s = np.linalg.inv(np.eye(len(idx_beta)) * (s_ + s_star_))  # (d + d_star)[self.support_index_beta]/C2
 
             index = np.logical_and(np.tile(np.concatenate([index_a, index_s, np.array([1])]), size_mat)
                                    .reshape(size_mat, size_mat),
@@ -232,8 +208,8 @@ class SVM:
 
             f_error, g_error = error_function(alpha, beta, b)
             f_error_s, g_error_s = error_function(alpha_s, beta_s, b_s)
-            # u_s_f = calc_weight(np.zeros(self.n_samples), f_error_s)
-            # u_s_g = calc_weight()
+            u_s_f = calc_weight(np.zeros(self.n_samples), f_error_s)
+            u_s_g = calc_weight()
 
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
                 alpha = alpha_s
@@ -244,10 +220,10 @@ class SVM:
             # beta += (-beta + beta_s) * eta
             # b += (-b + b_s) * eta
 
-            a[:self.n_samples] = calc_weight(a[:self.n_samples], f_error[::2], C1)
-            a[self.n_samples:] = calc_weight(a[self.n_samples:], f_error[1::2], C1)
-            s[:self.n_samples_prime*self.dim] = calc_weight(s[:self.n_samples_prime*self.dim], g_error[::2], C2)
-            s[self.n_samples_prime*self.dim:] = calc_weight(s[self.n_samples_prime*self.dim:], g_error[1::2], C2)
+            a[:self.n_samples] = calc_weight(f_error[::2], C1)
+            a[self.n_samples:] = calc_weight(f_error[1::2], C1)
+            s[:self.n_samples_prime*self.dim] = calc_weight(g_error[::2], C2)
+            s[self.n_samples_prime*self.dim:] = calc_weight(g_error[1::2], C2)
 
             if step > 1:
 
