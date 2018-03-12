@@ -3,7 +3,7 @@ import scipy.optimize._minimize as spmin
 import matplotlib.pyplot as plt
 
 
-# Todo matrix elements computation by runtime to save storage
+# Todo matrix elements computation by runtime to save storage?
 
 class SVM:
     def __init__(self, epsilon=0.1, epsilon_beta=0.1, kernel='rbf', gamma=0.1, method='rls'):
@@ -101,7 +101,7 @@ class SVM:
 # Todo irwls fit d_a and d_s inversion
 # Todo own error Function, maybe own class for the different methods?
 
-    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-8):
+    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-32):
 
         def calc_weight(error, constant):
             weight = np.zeros(error.shape)
@@ -156,6 +156,7 @@ class SVM:
         # x_predict = np.linspace(-8 * np.pi, 8 * np.pi, 300).reshape(-1, 1)
         debug_y = []
 
+        a_b_conv = False
         while not converged:
 
             index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
@@ -235,7 +236,7 @@ class SVM:
             else:
                 alpha += (alpha_s-alpha)
                 beta += (beta_s-beta)
-                b = b_s #(b_s-b)
+                b = b_s # (b_s-b)
 
             f_error, g_error = error_function(alpha, beta, b)
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
@@ -257,9 +258,13 @@ class SVM:
                 # if abs(lagrangian(alpha, beta, f_error, g_error)-l_old)< 10**-8:
                 #     converged = True
                 #     print('lagrangian converged step = '+ str(step))
-                if np.less(abs(alpha - self.alpha), 10**-4).all() and np.less(abs(beta - self.beta), 10**-4).all() and abs(b - self.intercept) < 10**-4:
-                    converged = True
-                    print('converged ' + str(step))
+                if np.less(abs(alpha - self.alpha), 10**-4).all() and np.less(abs(beta - self.beta), 10**-4).all():
+                    if not a_b_conv:
+                        a_b_conv = True
+                        print('alpha, beta converged ' + str(step))
+                    if abs(b - self.intercept) < 10**-4:
+                        converged = True
+                        print('converged ' + str(step))
             idx_beta = idx_beta.reshape(-1, self.dim)
 
             # l_old = lagrangian(alpha, beta, f_error, g_error)
