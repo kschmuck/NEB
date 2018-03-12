@@ -101,22 +101,22 @@ class SVM:
 # Todo irwls fit d_a and d_s inversion
 # Todo own error Function, maybe own class for the different methods?
 
-    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4):
+    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-8):
 
         def calc_weight(error, constant):
             weight = np.zeros(error.shape)
             # weight[error < 0.] = 0.
-            weight[error == 0.] = constant
-            weight[error > 0.] = constant / error[error > 0.]
+            weight[(error < error_cap) & (error >= 0.)] = constant/error_cap
+            weight[error > error_cap] = constant / error[error >= error_cap]
             return weight
 
         def error_function(alpha_, beta_, b_):
             func_error = np.zeros(self.n_samples*2)
             grad_error = np.zeros(self.n_samples_prime*self.dim*2)
-            func_error[::2] = k.T.dot(alpha_) + k_.T.dot(beta_) + b_ - self.y - self.epsilon
+            func_error[0::2] = k.T.dot(alpha_) + k_.T.dot(beta_) + b_ - self.y - self.epsilon
             func_error[1::2] = -k.T.dot(alpha_) - k_.T.dot(beta_) - b_ + self.y - self.epsilon
-            grad_error[::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
-            grad_error[1::2] = -g.T.dot(alpha_) + j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
+            grad_error[0::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
+            grad_error[1::2] = -g.T.dot(alpha_) - j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
             return func_error, grad_error
 
         def lagrangian(alpha_, beta_, func_error, grad_error):
@@ -156,8 +156,6 @@ class SVM:
         # x_predict = np.linspace(-8 * np.pi, 8 * np.pi, 300).reshape(-1, 1)
         debug_y = []
 
-        eta = 1.
-
         while not converged:
 
             index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
@@ -184,7 +182,7 @@ class SVM:
             if len(idx_alpha) == 0:
                 # to avoid the singularity if just derivatives occour as support vectors
                 calc_mat[-1, -1] = 1
-                print('avoid singularity ' + str(step))
+                # print('avoid singularity ' + str(step))
 
             calc_mat[:len(idx_alpha), :len(idx_alpha)] += d_a
             calc_mat[len(idx_alpha):-1, len(idx_alpha):-1] += d_s
@@ -202,16 +200,46 @@ class SVM:
             beta_s[idx_beta] = vec_[len(idx_alpha):-1]
             b_s = vec_[-1]
 
-            alpha += (-alpha+alpha_s)*eta
-            beta += (-beta+beta_s)*eta
-            b += (-b+b_s)*eta
+            # alpha += (-alpha+alpha_s)*eta
+            # beta += (-beta+beta_s)*eta
+            # b += (-b+b_s)*eta
 
             f_error, g_error = error_function(alpha, beta, b)
             f_error_s, g_error_s = error_function(alpha_s, beta_s, b_s)
-            u_s_f = calc_weight(np.zeros(self.n_samples), f_error_s)
-            u_s_g = calc_weight()
+            index_eta_f = np.logical_and(calc_weight(f_error_s, C1) < 0., calc_weight(f_error, C1) > 0.)
+            index_eta_g = np.logical_and(calc_weight(g_error_s, C2) < 0., calc_weight(g_error, C2) > 0.)
 
+            # if (index_eta_f.any()):
+            #     print('alpha error')
+            #     eta = np.min(calc_weight(f_error[index_eta_f], C1)/(calc_weight(f_error[index_eta_f], C1)-calc_weight(f_error_s[index_eta_f], C1)))
+            #     alpha += (-alpha + alpha_s) * eta
+            #     b += (-b + b_s) * eta
+            # else:
+            #     alpha = alpha_s
+            #     b = b_s
+            #
+            # if (index_eta_g.any()):
+            #     print('beta error')
+            #     eta = np.min(calc_weight(g_error[index_eta_g], C2) / ( calc_weight(g_error[index_eta_g], C2) - calc_weight(g_error_s[index_eta_g], C2)))
+            #     beta += (-beta + beta_s) * eta
+            # else:
+            #     beta = beta_s
+
+            if (index_eta_f.any() or index_eta_g.any()):
+                print('error')
+                eta = np.min(calc_weight(f_error[index_eta_f], C1)/(calc_weight(f_error[index_eta_f], C1)-calc_weight(f_error_s[index_eta_f], C1)))
+                alpha += (-alpha + alpha_s) * eta
+                beta += (-beta + beta_s) * eta
+                b += (-b + b_s) * eta
+                # b = b_s
+            else:
+                alpha += (alpha_s-alpha)
+                beta += (beta_s-beta)
+                b = b_s #(b_s-b)
+
+            f_error, g_error = error_function(alpha, beta, b)
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
+                print('lagrangian')
                 alpha = alpha_s
                 beta = beta_s
                 b = b_s
@@ -219,18 +247,22 @@ class SVM:
             # alpha += (-alpha + alpha_s) * eta
             # beta += (-beta + beta_s) * eta
             # b += (-b + b_s) * eta
-
-            a[:self.n_samples] = calc_weight(f_error[::2], C1)
+            f_error, g_error = error_function(alpha, beta, b)
+            a[:self.n_samples] = calc_weight(f_error[0::2], C1)
             a[self.n_samples:] = calc_weight(f_error[1::2], C1)
-            s[:self.n_samples_prime*self.dim] = calc_weight(g_error[::2], C2)
+            s[:self.n_samples_prime*self.dim] = calc_weight(g_error[0::2], C2)
             s[self.n_samples_prime*self.dim:] = calc_weight(g_error[1::2], C2)
 
             if step > 1:
-
+                # if abs(lagrangian(alpha, beta, f_error, g_error)-l_old)< 10**-8:
+                #     converged = True
+                #     print('lagrangian converged step = '+ str(step))
                 if np.less(abs(alpha - self.alpha), 10**-4).all() and np.less(abs(beta - self.beta), 10**-4).all() and abs(b - self.intercept) < 10**-4:
                     converged = True
                     print('converged ' + str(step))
             idx_beta = idx_beta.reshape(-1, self.dim)
+
+            # l_old = lagrangian(alpha, beta, f_error, g_error)
 
             self.support_index_alpha = support_index_alpha[idx_alpha]
             self.support_index_beta = []
