@@ -46,6 +46,7 @@ class SVM:
                             + sum([self.beta[self.support_index_beta[jj], jj].dot(self.kernel.kernel(
                                 self.x_prime[self.support_index_beta[jj]], x, nx=ii, ny=jj)) for jj in
                                  range(self.dim)])
+        return ret_mat
 
     def predict(self, x):
         if not self._is_fitted:
@@ -101,7 +102,7 @@ class SVM:
 # Todo irwls fit d_a and d_s inversion
 # Todo own error Function, maybe own class for the different methods?
 
-    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-32):
+    def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-8, eps=10**-4):
 
         def calc_weight(error, constant):
             weight = np.zeros(error.shape)
@@ -113,18 +114,17 @@ class SVM:
         def error_function(alpha_, beta_, b_):
             func_error = np.zeros(self.n_samples*2)
             grad_error = np.zeros(self.n_samples_prime*self.dim*2)
-            func_error[0::2] = k.T.dot(alpha_) + k_.T.dot(beta_) + b_ - self.y - self.epsilon
-            func_error[1::2] = -k.T.dot(alpha_) - k_.T.dot(beta_) - b_ + self.y - self.epsilon
+            func_error[0::2] = k.T.dot(alpha_) + k_prime.T.dot(beta_) + b_ - self.y - self.epsilon
+            func_error[1::2] = -k.T.dot(alpha_) - k_prime.T.dot(beta_) - b_ + self.y - self.epsilon
             grad_error[0::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
             grad_error[1::2] = -g.T.dot(alpha_) - j.T.dot(beta_) + self.y_prime.flatten() - self.epsilon_beta
             return func_error, grad_error
 
         def lagrangian(alpha_, beta_, func_error, grad_error):
-            return 1 / 2 * (alpha_.T.dot(k.dot(alpha_)) + alpha_.T.dot(g.dot(beta_)) + beta_.T.dot(k_.dot(alpha_))
-                            + (beta_.T.dot(j.dot(beta_))) + C1 * np.sum(func_error[func_error > 0])
-                            + C2 * np.sum(grad_error[grad_error > 0]))
+            return 1 / 2. * (alpha_.T.dot(k.dot(alpha_)) + alpha_.T.dot(g.dot(beta_)) + beta_.T.dot(k_prime.dot(alpha_))
+                + (beta_.T.dot(j.dot(beta_)))) + C1 * np.sum(func_error[func_error > 0]) + C2 * np.sum(grad_error[grad_error > 0])
 
-        k, g, k_, j = self._create_mat()
+        k, g, k_prime, j = self._create_mat()
 
         a = np.zeros(self.n_samples * 2)
         s = np.zeros(self.n_samples_prime*self.dim*2)
@@ -142,21 +142,16 @@ class SVM:
 
         mat[:self.n_samples, :self.n_samples] = k
         mat[:self.n_samples, self.n_samples:-1] = g
-        mat[self.n_samples:-1, :self.n_samples] = k_
+        mat[self.n_samples:-1, :self.n_samples] = k_prime
         mat[self.n_samples:-1, self.n_samples:-1] = j
         mat[:self.n_samples, -1] = 1.
-        mat[-1, :self.n_samples] = 1.
+        mat[-1, :self.n_samples] = -1.
 
         step = 1
         converged = False
         alpha = np.zeros(self.n_samples)
         beta = np.zeros(self.n_samples_prime * self.dim)
         b = 0
-
-        # x_predict = np.linspace(-8 * np.pi, 8 * np.pi, 300).reshape(-1, 1)
-        debug_y = []
-
-        a_b_conv = False
         while not converged:
 
             index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
@@ -191,8 +186,6 @@ class SVM:
             y_ = np.concatenate([self.y[idx_alpha] + (a_ - a_star_) / (a_ + a_star_) * self.epsilon,
                                  self.y_prime.flatten()[idx_beta] + (s_ - s_star_) / (s_ + s_star_) * self.epsilon_beta,
                                  np.array([0])])
-            # y_ = np.concatenate([self.y[idx_alpha] + a_add_y[idx_alpha], self.y_prime.flatten()[idx_beta] + s_add_y[idx_beta], np.array([0])])
-
             vec_ = np.linalg.inv(calc_mat).dot(y_)
 
             alpha_s = np.zeros(self.n_samples)
@@ -201,34 +194,18 @@ class SVM:
             beta_s[idx_beta] = vec_[len(idx_alpha):-1]
             b_s = vec_[-1]
 
-            # alpha += (-alpha+alpha_s)*eta
-            # beta += (-beta+beta_s)*eta
-            # b += (-b+b_s)*eta
-
             f_error, g_error = error_function(alpha, beta, b)
             f_error_s, g_error_s = error_function(alpha_s, beta_s, b_s)
             index_eta_f = np.logical_and(calc_weight(f_error_s, C1) < 0., calc_weight(f_error, C1) > 0.)
             index_eta_g = np.logical_and(calc_weight(g_error_s, C2) < 0., calc_weight(g_error, C2) > 0.)
 
-            # if (index_eta_f.any()):
-            #     print('alpha error')
-            #     eta = np.min(calc_weight(f_error[index_eta_f], C1)/(calc_weight(f_error[index_eta_f], C1)-calc_weight(f_error_s[index_eta_f], C1)))
-            #     alpha += (-alpha + alpha_s) * eta
-            #     b += (-b + b_s) * eta
-            # else:
-            #     alpha = alpha_s
-            #     b = b_s
-            #
-            # if (index_eta_g.any()):
-            #     print('beta error')
-            #     eta = np.min(calc_weight(g_error[index_eta_g], C2) / ( calc_weight(g_error[index_eta_g], C2) - calc_weight(g_error_s[index_eta_g], C2)))
-            #     beta += (-beta + beta_s) * eta
-            # else:
-            #     beta = beta_s
 
             if (index_eta_f.any() or index_eta_g.any()):
                 print('error')
-                eta = np.min(calc_weight(f_error[index_eta_f], C1)/(calc_weight(f_error[index_eta_f], C1)-calc_weight(f_error_s[index_eta_f], C1)))
+                eta = np.min([calc_weight(f_error[index_eta_f], C1)/
+                              (calc_weight(f_error[index_eta_f], C1) - calc_weight(f_error_s[index_eta_f], C1)),
+                              calc_weight(g_error[index_eta_g], C2) /
+                              (calc_weight(g_error[index_eta_g], C2) - calc_weight(g_error_s[index_eta_g], C2))])
                 alpha += (-alpha + alpha_s) * eta
                 beta += (-beta + beta_s) * eta
                 b += (-b + b_s) * eta
@@ -236,11 +213,11 @@ class SVM:
             else:
                 alpha += (alpha_s-alpha)
                 beta += (beta_s-beta)
-                b = b_s # (b_s-b)
+                b += (b_s-b)
+                # b = b_s
 
             f_error, g_error = error_function(alpha, beta, b)
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
-                print('lagrangian')
                 alpha = alpha_s
                 beta = beta_s
                 b = b_s
@@ -255,28 +232,19 @@ class SVM:
             s[self.n_samples_prime*self.dim:] = calc_weight(g_error[1::2], C2)
 
             if step > 1:
-                # if abs(lagrangian(alpha, beta, f_error, g_error)-l_old)< 10**-8:
-                #     converged = True
-                #     print('lagrangian converged step = '+ str(step))
-                if np.less(abs(alpha - self.alpha), 10**-4).all() and np.less(abs(beta - self.beta), 10**-4).all():
-                    if not a_b_conv:
-                        a_b_conv = True
-                        print('alpha, beta converged ' + str(step))
-                    if abs(b - self.intercept) < 10**-4:
+                if abs(lagrangian(alpha, beta, f_error, g_error) - l_old) < eps:
+                    converged = True
+                    print('lagrangian converged step = ' + str(step))
+                if np.less(abs(alpha - self.alpha), eps).all() and np.less(abs(beta - self.beta), eps).all():
+                    if (abs(b - self.intercept) < eps):
                         converged = True
                         print('converged ' + str(step))
             idx_beta = idx_beta.reshape(-1, self.dim)
-
-            # l_old = lagrangian(alpha, beta, f_error, g_error)
-
+            l_old = lagrangian(alpha, beta, f_error, g_error)
             self.support_index_alpha = support_index_alpha[idx_alpha]
             self.support_index_beta = []
             for ii in range(self.dim):
                 self.support_index_beta.append(support_index_beta[idx_beta[:, ii]])
-
-            # if step < 20:
-            #     # if (step % 100) == 0:
-            #     debug_y.append(self.predict(x_predict))
 
             if step >= max_iter:
                 print('iteration is not converged ' + str(step))
@@ -289,9 +257,9 @@ class SVM:
             self.alpha = alpha
             self.beta = beta
             self.intercept = b
+            self._is_fitted = True
 
         self.beta = self.beta.reshape(-1, self.dim)
-        return debug_y
 
     def _fit_rls(self, C1=1.0, C2=1.0):
 
