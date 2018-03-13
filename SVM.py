@@ -98,13 +98,14 @@ class SVM:
         else:
             raise NotImplementedError('Method is not implemented use irwls, rls or simple')
 
-# Todo irwls fit convergence criteria, and test if epsilon = 0 and epsilon_beta = 0
+# Todo irwls fit convergence criteria,
 # Todo irwls fit d_a and d_s inversion
 # Todo own error Function, maybe own class for the different methods?
 
     def _fit_irwls(self, C1=1.0, C2=1.0, max_iter=10**4, error_cap=10**-8, eps=10**-4):
 
         def calc_weight(error, constant):
+            # constant = 1.
             weight = np.zeros(error.shape)
             # weight[error < 0.] = 0.
             weight[(error < error_cap) & (error >= 0.)] = constant/error_cap
@@ -114,6 +115,7 @@ class SVM:
         def error_function(alpha_, beta_, b_):
             func_error = np.zeros(self.n_samples*2)
             grad_error = np.zeros(self.n_samples_prime*self.dim*2)
+
             func_error[0::2] = k.T.dot(alpha_) + k_prime.T.dot(beta_) + b_ - self.y - self.epsilon
             func_error[1::2] = -k.T.dot(alpha_) - k_prime.T.dot(beta_) - b_ + self.y - self.epsilon
             grad_error[0::2] = g.T.dot(alpha_) + j.T.dot(beta_) - self.y_prime.flatten() - self.epsilon_beta
@@ -122,7 +124,7 @@ class SVM:
 
         def lagrangian(alpha_, beta_, func_error, grad_error):
             return 1 / 2. * (alpha_.T.dot(k.dot(alpha_)) + alpha_.T.dot(g.dot(beta_)) + beta_.T.dot(k_prime.dot(alpha_))
-                + (beta_.T.dot(j.dot(beta_)))) + C1 * np.sum(func_error[func_error > 0]) + C2 * np.sum(grad_error[grad_error > 0])
+                + (beta_.T.dot(j.dot(beta_)))) + C1* np.sum(func_error[func_error > 0]) + C2 * np.sum(grad_error[grad_error > 0])
 
         k, g, k_prime, j = self._create_mat()
 
@@ -186,7 +188,7 @@ class SVM:
             calc_mat[len(idx_alpha):-1, len(idx_alpha):-1] += d_s
 
             y_ = np.concatenate([self.y[idx_alpha] + ((a_ - a_star_) / (a_ + a_star_)) * self.epsilon,
-                                 self.y_prime.flatten()[idx_beta] + ((s_ - s_star_) / (s_ + s_star_)) * self.epsilon_beta,
+                                 self.y_prime.flatten()[idx_beta] - ((s_ + s_star_) / (s_ + s_star_)) * self.epsilon_beta,
                                  np.array([0])])
             vec_ = np.linalg.inv(calc_mat).dot(y_)
 
@@ -202,7 +204,6 @@ class SVM:
             index_eta_g = np.logical_and(calc_weight(g_error_s, C2) > 0., calc_weight(g_error, C2) < 0.)
 
             if index_eta_f.any() or index_eta_g.any():
-                print('error')
                 eta = np.min([calc_weight(f_error[index_eta_f], C1) /
                               (calc_weight(f_error[index_eta_f], C1) - calc_weight(f_error_s[index_eta_f], C1)),
                               calc_weight(g_error[index_eta_g], C2) /
@@ -214,10 +215,11 @@ class SVM:
             else:
                 alpha += (alpha_s-alpha)
                 beta += (beta_s-beta)
-                # b += (b_s-b)
-                b = b_s
+                b += (b_s-b)
+                # b = b_s
 
             f_error, g_error = error_function(alpha, beta, b)
+
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
                 alpha = alpha_s
                 beta = beta_s
