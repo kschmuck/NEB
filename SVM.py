@@ -145,13 +145,15 @@ class SVM:
         mat[self.n_samples:-1, :self.n_samples] = k_prime
         mat[self.n_samples:-1, self.n_samples:-1] = j
         mat[:self.n_samples, -1] = 1.
-        mat[-1, :self.n_samples] = -1.
+        mat[-1, :self.n_samples] = 1.
 
         step = 1
         converged = False
         alpha = np.zeros(self.n_samples)
         beta = np.zeros(self.n_samples_prime * self.dim)
         b = 0
+        count = step
+
         while not converged:
 
             index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
@@ -178,13 +180,13 @@ class SVM:
             if len(idx_alpha) == 0:
                 # to avoid the singularity if just derivatives occour as support vectors
                 calc_mat[-1, -1] = 1
-                # print('avoid singularity ' + str(step))
+                print('avoid singularity ' + str(step))
 
             calc_mat[:len(idx_alpha), :len(idx_alpha)] += d_a
             calc_mat[len(idx_alpha):-1, len(idx_alpha):-1] += d_s
 
-            y_ = np.concatenate([self.y[idx_alpha] + (a_ - a_star_) / (a_ + a_star_) * self.epsilon,
-                                 self.y_prime.flatten()[idx_beta] + (s_ - s_star_) / (s_ + s_star_) * self.epsilon_beta,
+            y_ = np.concatenate([self.y[idx_alpha] + ((a_ - a_star_) / (a_ + a_star_)) * self.epsilon,
+                                 self.y_prime.flatten()[idx_beta] + ((s_ - s_star_) / (s_ + s_star_)) * self.epsilon_beta,
                                  np.array([0])])
             vec_ = np.linalg.inv(calc_mat).dot(y_)
 
@@ -196,13 +198,12 @@ class SVM:
 
             f_error, g_error = error_function(alpha, beta, b)
             f_error_s, g_error_s = error_function(alpha_s, beta_s, b_s)
-            index_eta_f = np.logical_and(calc_weight(f_error_s, C1) < 0., calc_weight(f_error, C1) > 0.)
-            index_eta_g = np.logical_and(calc_weight(g_error_s, C2) < 0., calc_weight(g_error, C2) > 0.)
+            index_eta_f = np.logical_and(calc_weight(f_error_s, C1) > 0., calc_weight(f_error, C1) < 0.)
+            index_eta_g = np.logical_and(calc_weight(g_error_s, C2) > 0., calc_weight(g_error, C2) < 0.)
 
-
-            if (index_eta_f.any() or index_eta_g.any()):
+            if index_eta_f.any() or index_eta_g.any():
                 print('error')
-                eta = np.min([calc_weight(f_error[index_eta_f], C1)/
+                eta = np.min([calc_weight(f_error[index_eta_f], C1) /
                               (calc_weight(f_error[index_eta_f], C1) - calc_weight(f_error_s[index_eta_f], C1)),
                               calc_weight(g_error[index_eta_g], C2) /
                               (calc_weight(g_error[index_eta_g], C2) - calc_weight(g_error_s[index_eta_g], C2))])
@@ -213,8 +214,8 @@ class SVM:
             else:
                 alpha += (alpha_s-alpha)
                 beta += (beta_s-beta)
-                b += (b_s-b)
-                # b = b_s
+                # b += (b_s-b)
+                b = b_s
 
             f_error, g_error = error_function(alpha, beta, b)
             if lagrangian(alpha, beta, f_error, g_error) > lagrangian(alpha_s, beta_s, f_error_s, g_error_s):
@@ -222,10 +223,7 @@ class SVM:
                 beta = beta_s
                 b = b_s
 
-            # alpha += (-alpha + alpha_s) * eta
-            # beta += (-beta + beta_s) * eta
-            # b += (-b + b_s) * eta
-            f_error, g_error = error_function(alpha, beta, b)
+            # f_error, g_error = error_function(alpha, beta, b)
             a[:self.n_samples] = calc_weight(f_error[0::2], C1)
             a[self.n_samples:] = calc_weight(f_error[1::2], C1)
             s[:self.n_samples_prime*self.dim] = calc_weight(g_error[0::2], C2)
@@ -235,10 +233,13 @@ class SVM:
                 if abs(lagrangian(alpha, beta, f_error, g_error) - l_old) < eps:
                     converged = True
                     print('lagrangian converged step = ' + str(step))
+
                 if np.less(abs(alpha - self.alpha), eps).all() and np.less(abs(beta - self.beta), eps).all():
+                    count += 1
                     if (abs(b - self.intercept) < eps):
                         converged = True
                         print('converged ' + str(step))
+
             idx_beta = idx_beta.reshape(-1, self.dim)
             l_old = lagrangian(alpha, beta, f_error, g_error)
             self.support_index_alpha = support_index_alpha[idx_alpha]
@@ -248,17 +249,18 @@ class SVM:
 
             if step >= max_iter:
                 print('iteration is not converged ' + str(step))
-                print(abs(alpha - self.alpha))
-                print(abs(beta - self.beta))
-                print(abs(b - self.intercept))
+                # print(abs(alpha - self.alpha))
+                # print(abs(beta - self.beta))
+                # print(abs(b - self.intercept))
                 break
             step += 1
 
-            self.alpha = alpha
-            self.beta = beta
-            self.intercept = b
-            self._is_fitted = True
+            self.alpha = alpha.copy()
+            self.beta = beta.copy()
+            self.intercept = b.copy()
 
+        self._is_fitted = True
+        print('alpha beta convergends counter '+ str(count))
         self.beta = self.beta.reshape(-1, self.dim)
 
     def _fit_rls(self, C1=1.0, C2=1.0):
