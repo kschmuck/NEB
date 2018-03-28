@@ -44,7 +44,7 @@ class SVM:
         self.x_prime_train = x_prime_train
         self.y_prime_train = y_prime_train
 
-        self.n_samples = len(y_train)
+        self.n_samples = len(x_train)
         if y_prime_train is None:
             self.n_samples_prime = 0
             self.n_dim = len(x_train[0])
@@ -123,7 +123,7 @@ class SVM:
         See
         :param C1: adds 1/C1 to the simple kernel k(x, y)
         :param C2: adds 1/C2 to the derivative kernel dx dy k(x,y)
-        :return: matrix
+        :return: matrix elements k, g, k_prime, j
         """
 
         # [[k, g]
@@ -432,6 +432,71 @@ class RLS(SVM):
             self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
 
         self._is_fitted = True
+
+
+class GPR(SVM):
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, sigma_f=0.1, C1=None, C2=None):
+        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+        # sigma_e, sigma_g = 10**-7, sigma_f = 1
+        # covariance function = kernel
+        # prior mean = K(x*,x)inv(K(x,x)+sigma**2)y_train
+        noise = 10**-7
+        self.sigma_f = sigma_f
+
+        # initial energy value and gradient value
+        prior_mean_y = np.mean(y_train)
+        prior_mean_y_prime = np.mean(y_prime_train, axis=0)
+
+        k, g, k_prime, j = self._create_mat()
+
+        mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
+                        self.n_samples + self.n_samples_prime * self.n_dim])
+
+        mat[:self.n_samples, :self.n_samples] = k + np.eye(self.n_samples) * noise
+        mat[:self.n_samples, self.n_samples:] = g
+        mat[self.n_samples:, :self.n_samples] = k_prime
+        mat[self.n_samples:, self.n_samples:] = j + np.eye(self.n_samples_prime*self.n_dim) * noise
+
+        weights = np.linalg.inv(mat).dot(np.concatenate([self.y_train-prior_mean_y,
+                                                         self.y_prime_train.flatten()-prior_mean_y_prime]))
+        self._alpha = weights[:self.n_samples]
+        self._beta = weights[self.n_samples:].reshape(-1, self.n_dim)
+        self._intercept = np.mean(prior_mean_y)
+
+        self._support_index_alpha = np.arange(0, self.n_samples, 1)
+        self._support_index_beta = []
+        for ii in range(self.n_dim):
+            self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
+        #
+        self._is_fitted = True
+
+    def covariance(self, x):
+        k, g, k_prime, j = self._create_mat()
+
+        mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
+                        self.n_samples + self.n_samples_prime * self.n_dim])
+
+        mat[:self.n_samples, :self.n_samples] = k
+        mat[:self.n_samples, self.n_samples:] = g
+        mat[self.n_samples:, :self.n_samples] = k_prime
+        mat[self.n_samples:, self.n_samples:] = j
+
+        self.x_train = x
+        self.x_prime_train = x
+        self.n_samples = len(x)
+        self.n_samples_prime = len(x)
+
+        k_new, g_new, k_prime_new, j_new = self._create_mat()
+
+        mat_new = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
+                        self.n_samples + self.n_samples_prime * self.n_dim])
+
+        mat_new[:self.n_samples, :self.n_samples] = k_new
+        mat_new[:self.n_samples, self.n_samples:] = g_new
+        mat_new[self.n_samples:, :self.n_samples] = k_prime_new
+        mat_new[self.n_samples:, self.n_samples:] = j_new
+
+        return k_new - mat_new.dot(np.linalg.inv(mat).dot(mat_new.T))
 
 
 class RBF:
