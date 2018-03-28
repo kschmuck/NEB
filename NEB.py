@@ -133,6 +133,7 @@ class ImageSet(list):
         self.energy_gradient_func = None
         self.atom_list = atom_list
         # self.tangent_calc_name=
+        # for the machine learning to have all old points and to get some impression of the process
 
     def set_positions(self, positions):
         # positions in a 3D matrix num_images x atoms x coordinates
@@ -335,7 +336,7 @@ class Optimizer:
         else:
             lower = 0
             upper = len(images)+1
-
+        t = time.clock()
         while not converged:
             for element in images[lower:upper]:
                 if not element.frozen:
@@ -361,15 +362,15 @@ class Optimizer:
 
             if self.is_converged(images[lower:upper]):
                 converged = True
-                print('converged ' + str(step))
-                for element in images[lower:upper]:
-                    print(element.force_norm())
-
+                print('Nudged elastic band converged ' + str(step))
+                # for element in images[lower:upper]:
+                #     print(element.force_norm())
+            # print(time.clock()-t)
             step += 1
             if step >= max_steps:
-                print('not converged ' + str(step))
-                for element in images[lower:upper]:
-                    print(element.force_norm())
+                print('Nudged elastic band not converged ' + str(step))
+                # for element in images[lower:upper]:
+                #     print(element.force_norm())
                 break
         return images
 

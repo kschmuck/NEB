@@ -5,8 +5,6 @@ def write2file(number_of_atoms, atom_list, coordinates, file):
     for ii in range(0, number_of_atoms):
         file.write(atom_list[ii] + ' ')
         file.write(' '.join(map(str, coordinates[ii, :]))+'\n')
-    # file.write('C ' + ' '.join(map(str, coordinates[[3,4,5]]))+'\n')
-    # file.write('N ' + ' '.join(map(str, coordinates[[6,7,8]]))+'\n')
     file.write('\n')
 
 def write_images2File(positions, fileName, atom_list):

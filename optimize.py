@@ -77,8 +77,11 @@ class Fire:
         if self.velocity is None:
             self.velocity = gradient * self.delta_t
         vf = np.dot(gradient, self.velocity)
-        self.velocity = (1.0 - self.alpha) * self.velocity + self.alpha * gradient / np.linalg.norm(
-            gradient) * np.linalg.norm(self.velocity)
+        if np.linalg.norm(gradient) != 0:
+            self.velocity = (1.0 - self.alpha) * self.velocity + self.alpha * gradient / np.linalg.norm(
+                gradient) * np.linalg.norm(self.velocity)
+        else:
+            self.velocity = (1.0 - self.alpha) * self.velocity + self.alpha * gradient * np.linalg.norm(self.velocity)
         if (vf >= 0.0):
             if (self.n_min_step > self.n_min):
                 self.delta_t = min(self.delta_t * self.f_inc, self.delta_t_max)
