@@ -2,7 +2,6 @@ import numpy as np
 import scipy.optimize._minimize as spmin
 import matplotlib.pyplot as plt
 
-# Todo Blockwise inversion https://en.wikipedia.org/wiki/Invertible_matrix can be used for any matrix
 
 class ML:
     """ Parent class for the surface fitting
@@ -60,7 +59,7 @@ class ML:
                 return self._alpha[self._support_index_alpha].dot(self.kernel(
                     self.x_train[self._support_index_alpha], x)) + sum(
                     self._beta[self._support_index_beta[ii], ii].dot(self.kernel(
-                        self.x_prime_train[self._support_index_beta[ii]], x, ny=ii)) for ii in range(self.n_dim)) \
+                        self.x_prime_train[self._support_index_beta[ii]], x, dy=ii+1)) for ii in range(self.n_dim)) \
                        + self._intercept
 
             elif self.n_samples != 0:
@@ -69,7 +68,7 @@ class ML:
 
             else:
                 return sum(self._beta[self._support_index_beta[ii], ii].dot(self.kernel(
-                    self.x_prime_train[self._support_index_beta[ii]], x, ny=ii)) for ii in range(self.n_dim))
+                    self.x_prime_train[self._support_index_beta[ii]], x, dy=ii+1)) for ii in range(self.n_dim))
 
         else:
             raise ValueError('not fitted yet')
@@ -85,15 +84,15 @@ class ML:
             if self.n_samples_prime != 0 and self.n_samples != 0:
                 for ii in range(self.n_dim):
                     ret_mat[:, ii] = self._alpha[self._support_index_alpha].dot(self.kernel(
-                        self.x_train[self._support_index_alpha], x, nx=ii)) \
+                        self.x_train[self._support_index_alpha], x, dx=ii+1)) \
                                      + sum([self._beta[self._support_index_beta[jj], jj].dot(self.kernel(
-                        self.x_prime_train[self._support_index_beta[jj]], x, nx=ii, ny=jj)) for jj in
+                        self.x_prime_train[self._support_index_beta[jj]], x, dx=ii+1, dy=jj+1)) for jj in
                         range(self.n_dim)])
 
             elif self.n_samples != 0:
                 for ii in range(self.n_dim):
                     ret_mat[:, ii] = self._alpha[self._support_index_alpha].dot(self.kernel(
-                        self.x_train[self._support_index_alpha], x, nx=ii))
+                        self.x_train[self._support_index_alpha], x, dx=ii+1))
 
             else:
                 for ii in range(self.n_dim):
@@ -121,34 +120,14 @@ class ML:
         # [[k, g]
         #  [k_prime,  j]]
 
-        # k = np.zeros([self.n_samples, self.n_samples])
-        # g_ = np.zeros([self.n_samples, self.n_samples_prime*self.n_dim])
-        # k_prime_ = np.zeros([self.n_samples_prime*self.n_dim, self.n_samples])
-        # j = np.zeros([self.n_samples_prime*self.n_dim, self.n_samples_prime*self.n_dim])
-
         if self.n_samples != 0:
-            k = self._create_mat_part(self.x_train, self.x_train, dxy = 0)
-            # mat = self.kernel(self.x_train, self.x_train)
-            # k[:, :] = mat
+            k = self._create_mat_part(self.x_train, self.x_train, dxy=0)
 
         if self.n_samples_prime != 0:
             j = self._create_mat_part(self.x_prime_train, self.x_prime_train, dxy=2)
-            # j = np.zeros([self.n_samples_prime * self.n_dim, self.n_samples_prime * self.n_dim])
-
-            # for nx in range(0, self.n_dim):
-            #     for ny in range(0, self.n_dim):
-            #         ind_column = [ny * self.n_samples_prime, (ny + 1) * self.n_samples_prime]
-            #         ind_row = [nx * self.n_samples_prime, (nx + 1) * self.n_samples_prime]
-            #         mat = self.kernel(self.x_prime_train, self.x_prime_train, nx=nx, ny=ny)
-            #         j[ind_column[0]:ind_column[1], ind_row[0]:ind_row[1]] = mat
 
         if self.n_samples != 0 and self.n_samples_prime != 0:
             g, k_prime = self._create_mat_part(self.x_train, self.x_prime_train, dxy=1)
-        #     for dn in range(0, self.n_dim):
-        #         ind1 = [dn * self.n_samples_prime, (dn + 1) * self.n_samples_prime]
-        #         ind2 = [0, self.n_samples]
-        #         g_[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(self.x_prime_train, self.x_train, nx=dn, ny=0)
-        #         k_prime_[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(self.x_prime_train, self.x_train, nx=0, ny=dn)
 
         return k, g, k_prime, j
 
@@ -170,21 +149,22 @@ class ML:
 
         elif dxy == 1:
             g = np.zeros([len(x), len(y)*len(y[0])])
-            k_prime = np.zeros([len(y)*len(y[0]), len(x)])
+            # k_prime = np.zeros([len(y)*len(y[0]), len(x)])
             for ii in range(0, len(y[0])):
                 ind1 = [ii * len(y), (ii + 1) * len(y)]
                 ind2 = [0, len(x)]
-                g[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(x, y, nx=ii, ny=0)
-                k_prime[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(x, y, nx=0, ny=ii)
-            return g, k_prime
+                g[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(y, x, dx=ii+1, dy=0)
+                # k_prime[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(y, x, nx=0, ny=ii+1)
+
+            return g, g.T
 
         else:
             j = np.zeros([len(x)*len(x[0]), len(y)*len(y[0])])
             for ii in range(0, len(x[0])):
                 for jj in range(0, len(y[0])):
-                    ind_column = [jj * self.n_samples_prime, (jj + 1) * self.n_samples_prime]
-                    ind_row = [ii * self.n_samples_prime, (ii + 1) * self.n_samples_prime]
-                    j[ind_column[0]:ind_column[1], ind_row[0]:ind_row[1]] = self.kernel(x, y, nx=ii, ny=jj)
+                    ind1 = [ii * self.n_samples_prime, (ii + 1) * self.n_samples_prime]
+                    ind2 = [jj * self.n_samples_prime, (jj + 1) * self.n_samples_prime]
+                    j[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(x, y, dx=ii + 1, dy=jj + 1)
             return j
 
     def _invert_mat(self, mat):
@@ -420,10 +400,10 @@ class RLS(ML):
         if not minimze_b:
             mat_size = self.n_samples + self.n_samples_prime * self.n_dim + 1
             mat = np.zeros([mat_size, mat_size])
-            mat[:self.n_samples, :self.n_samples] = k + np.eye(self.n_samples)*1/C1
+            mat[:self.n_samples, :self.n_samples] = k + np.eye(self.n_samples)/C1
             mat[:self.n_samples, self.n_samples:-1] = g
             mat[self.n_samples:-1, :self.n_samples] = k_prime
-            mat[self.n_samples:-1, self.n_samples:-1] = j + np.eye(self.n_samples_prime*self.n_dim)*1/C2
+            mat[self.n_samples:-1, self.n_samples:-1] = j + np.eye(self.n_samples_prime*self.n_dim)/C2
 
             if self.n_samples == 0:
                 mat[-1, -1] = 1
@@ -526,16 +506,10 @@ class GPR(ML):
         mat[self.n_samples:, self.n_samples:] = j
 
         k_new = self._create_mat_part(x, x, dxy=0)
-        g_new, k_prime_new = self._create_mat_part(x, self.x_train, dxy=1)
-        # j_new = self._create_mat_part(x_prime, x_prime,dxy=2)
 
         mat_new = np.zeros([self.n_samples + self.n_dim*self.n_samples_prime, len(x)])
 
         mat_new[:self.n_samples] = self._create_mat_part(x, self.x_train)
         mat_new[self.n_samples:], dummy = self._create_mat_part(x, self.x_prime_train, dxy=1)
-        # mat_new[:len(x), :len(x)] = k_new
-        # mat_new[:len(x), len(x):] = g_new
-        # mat_new[len(x):, :len(x)] = k_prime_new
-        # mat_new[len(x):, len(x):] = j_new
 
         return sum(k_new - mat_new.T.dot(np.linalg.inv(mat).dot(mat_new)))
