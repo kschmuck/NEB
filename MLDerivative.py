@@ -458,58 +458,88 @@ class RLS(ML):
         self._is_fitted = True
 
 
-class GPR(ML):
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, sigma_f=0.0, C1=None, C2=None):
-        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
-        # sigma_e, sigma_g = 10**-7, sigma_f = 1
-        # covariance function = kernel
-        # prior mean = K(x*,x)inv(K(x,x)+sigma**2)y_train
-        noise = 10**-7
-        self.sigma_f = sigma_f
+class GPR:
+# Todo optimize hyperparameters (minimizing them with respect to mean+liklihood+covariance
+# Todo use of hyperparameters
+# Todo covariance matrix
+# Todo liklihood
+# Todo mean function --> constant mean
+    def __init__(self):
+        self.mean_function = self._constant_mean
+        self.hyper_parameters = None
+        self.covariance_function = None
 
-        # initial energy value and gradient value
-        prior_mean_y = np.mean(y_train)
-        prior_mean_y_prime = np.mean(y_prime_train, axis=0)
+        self.x_train = None
+        self.y_train = None
+        self.x_prime_train = None
+        self.y_prime_train = None
 
-        k, g, k_prime, j = self._create_mat()
+        self.n_samples = None
+        self.n_prime_samples = None
+        self.n_dim = None
 
-        mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
-                        self.n_samples + self.n_samples_prime * self.n_dim])
+    def _covariance_function(self, x, y):
+        self.kernel(x,y)
 
-        mat[:self.n_samples, :self.n_samples] = k + np.eye(self.n_samples) * noise
-        mat[:self.n_samples, self.n_samples:] = g
-        mat[self.n_samples:, :self.n_samples] = k_prime
-        mat[self.n_samples:, self.n_samples:] = j + np.eye(self.n_samples_prime*self.n_dim) * noise
+    def _get_mean(self):
+        # sigma_m**2
+        return np.array([self.hyper_parameters]*self.n_dim)
 
-        weights = np.linalg.inv(mat).dot(np.concatenate([self.y_train-prior_mean_y,
-                                                         self.y_prime_train.flatten()-prior_mean_y_prime]))
-        self._alpha = weights[:self.n_samples]
-        self._beta = weights[self.n_samples:].reshape(-1, self.n_dim)
-        self._intercept = np.mean(prior_mean_y)
-
-        self._support_index_alpha = np.arange(0, self.n_samples, 1)
-        self._support_index_beta = []
-        for ii in range(self.n_dim):
-            self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
-        #
-        self._is_fitted = True
-
-    def covariance(self, x):
-        k, g, k_prime, j = self._create_mat()
-
-        mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
-                        self.n_samples + self.n_samples_prime * self.n_dim])
-
-        mat[:self.n_samples, :self.n_samples] = k
-        mat[:self.n_samples, self.n_samples:] = g
-        mat[self.n_samples:, :self.n_samples] = k_prime
-        mat[self.n_samples:, self.n_samples:] = j
-
-        k_new = self._create_mat_part(x, x, dxy=0)
-
-        mat_new = np.zeros([self.n_samples + self.n_dim*self.n_samples_prime, len(x)])
-
-        mat_new[:self.n_samples] = self._create_mat_part(x, self.x_train)
-        mat_new[self.n_samples:], dummy = self._create_mat_part(x, self.x_prime_train, dxy=1)
-
-        return sum(k_new - mat_new.T.dot(np.linalg.inv(mat).dot(mat_new)))
+    # def get_covariance_matrix(self, x, y):
+    #     # train x and y are the same
+    #     # cross validation x training y testing
+    #     return self.kernel(x, y, dx=0, dy=0)
+    #
+    # def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, sigma_f=0.01, C1=None, C2=None):
+    #     self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+    #     # sigma_e, sigma_g = 10**-7, sigma_f = 1
+    #     # covariance function = kernel
+    #     # prior mean = K(x*,x)inv(K(x,x)+sigma**2)y_train
+    #     noise = 10**-7
+    #     self.sigma_f = sigma_f
+    #
+    #     # initial energy value and gradient value
+    #     prior_mean_y = np.mean(y_train)*0
+    #     prior_mean_y_prime = np.mean(y_prime_train, axis=0)*0
+    #
+    #     k, g, k_prime, j = self._create_mat()
+    #
+    #     mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
+    #                     self.n_samples + self.n_samples_prime * self.n_dim])
+    #
+    #     mat[:self.n_samples, :self.n_samples] = k + np.eye(self.n_samples) * noise
+    #     mat[:self.n_samples, self.n_samples:] = g
+    #     mat[self.n_samples:, :self.n_samples] = k_prime
+    #     mat[self.n_samples:, self.n_samples:] = j + np.eye(self.n_samples_prime*self.n_dim) * noise
+    #     target_vec = np.concatenate([self.y_train-prior_mean_y, self.y_prime_train.flatten()-prior_mean_y_prime])
+    #     weights = np.linalg.inv(mat).dot(target_vec)
+    #     self._alpha = weights[:self.n_samples]
+    #     self._beta = weights[self.n_samples:].reshape(-1, self.n_dim)
+    #     self._intercept = np.mean(prior_mean_y)
+    #
+    #     self._support_index_alpha = np.arange(0, self.n_samples, 1)
+    #     self._support_index_beta = []
+    #     for ii in range(self.n_dim):
+    #         self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
+    #     #
+    #     self._is_fitted = True
+    #
+    # def covariance(self, x):
+    #     k, g, k_prime, j = self._create_mat()
+    #
+    #     mat = np.zeros([self.n_samples + self.n_samples_prime * self.n_dim,
+    #                     self.n_samples + self.n_samples_prime * self.n_dim])
+    #
+    #     mat[:self.n_samples, :self.n_samples] = k
+    #     mat[:self.n_samples, self.n_samples:] = g
+    #     mat[self.n_samples:, :self.n_samples] = k_prime
+    #     mat[self.n_samples:, self.n_samples:] = j
+    #
+    #     k_new = self._create_mat_part(x, x, dxy=0)
+    #
+    #     mat_new = np.zeros([self.n_samples + self.n_dim*self.n_samples_prime, len(x)])
+    #
+    #     mat_new[:self.n_samples] = self._create_mat_part(x, self.x_train)
+    #     mat_new[self.n_samples:], dummy = self._create_mat_part(x, self.x_prime_train, dxy=1)
+    #
+    #     return sum(k_new - mat_new.T.dot(np.linalg.inv(mat).dot(mat_new)))
