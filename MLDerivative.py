@@ -477,17 +477,18 @@ class GPR(ML):
     # Todo mean function --> constant mean --> mean for all is [mean(y), mean(y_prime)]
     def __init__(self, kernel):
         # RBF kernel only supported and a constant mean over all training points
-        # 0:1 covariance [length scale, signal variance], 2 likelihood [variance], 3 mean [constant]
-        # self.hyper_parameter = np.array([0, 0., np.log(.1), 0.0])
         # 1:2 covariance [length scale, signal variance], 3 likelihood [variance], 0 mean [constant]
-        self.hyper_parameter = np.array([0.0, 0.0, 0.0, np.log(.1)])
+        # self.hyper_parameter = np.array([0.0, 0.0, 0.0, np.log(.1)])
 
-        # chlesky matrix
+        # cholesky matrix
         self.L = None
-        self.noise_percsion = None
+        self.noise_precesion = None
         self.y = None
 
-        ML.__init__(self, RBF(gamma=0., amplitude=0.))
+        self.likelihood = self.Likelihood()
+        self.mean = self.Mean()
+
+        ML.__init__(self, self.Covariance())
         # self.set_hyper_parameters_rbf_kernel()
 
     def fit(self, x_train, y_train):
@@ -505,7 +506,7 @@ class GPR(ML):
         hyper_parameter = opt[0]
         likelihood_value = opt[1]
         # print(opt[1])
-        # if opt[4] == 2:
+        # if opt[4] != 0:
         #     search_range = 4# -5, 5
         #     hyper_rand = hyper_parameter
         #     for ii in range(30):
@@ -536,7 +537,7 @@ class GPR(ML):
         L = np.linalg.cholesky(K/likelihood_noise_variance+np.eye(self.n_samples)).T
         alpha = np.linalg.solve(L, np.linalg.solve(L.T, self.y_train- m))/likelihood_noise_variance
         self._alpha = alpha
-        self.noise_percsion = np.ones([self.n_samples, 1])/np.sqrt(likelihood_noise_variance)
+        self.noise_precesion = np.ones([self.n_samples, 1]) / np.sqrt(likelihood_noise_variance)
         self.L = L
 
         nlz = -0.5*np.dot(self.y_train-m, alpha) - np.log(np.diag(L)).sum() - self.n_samples*np.log(2*np.pi*likelihood_noise_variance)/2.
@@ -552,16 +553,16 @@ class GPR(ML):
 
         dnlz = np.zeros(len(self.hyper_parameter))
         Q = 1./likelihood_noise_variance*np.linalg.solve(L, np.linalg.solve(L.T, np.eye(self.n_samples))) - np.dot(alpha.reshape(-1,1), alpha.reshape(-1,1).T)
+        dnlz[0] = -np.sum(alpha) # mean
         dnlz[1] = 0.5*(Q*self.kernel(self.x_train, self.x_train, dp=1)).sum()
         dnlz[2] = 0.5*(Q*self.kernel(self.x_train, self.x_train, dp=2)).sum()
-        dnlz[0] = -np.sum(alpha)
-        dnlz[3] = np.trace(Q)*likelihood_noise_variance
+        dnlz[3] = np.trace(Q)*likelihood_noise_variance # likelihood
 
         return dnlz
 
     def set_hyper_parameters_rbf_kernel(self):
-        self.kernel.gamma = 1./np.exp(0.5*self.hyper_parameter[1]**2) #1./np.exp(0.5*)
-        self.kernel.amplitude = np.exp(2*self.hyper_parameter[2])#
+        self.kernel.gamma = self.hyper_parameter[1] #1./np.exp(0.5*)
+        self.kernel.amplitude = self.hyper_parameter[2]#np.exp(2*)
 
     def predict(self, x):
         n = len(x)
@@ -570,7 +571,7 @@ class GPR(ML):
         m = self.hyper_parameter[0]*np.ones(n)
 
         Fmu = m + np.dot(K_cross.T, self._alpha)
-        V = np.linalg.solve(self.L.T, np.tile(self.noise_percsion, (1, n)) * K_cross)
+        V = np.linalg.solve(self.L.T, np.tile(self.noise_precesion, (1, n)) * K_cross)
         fs2= K - np.array([(V * V).sum(axis=0)]).T
         fs2 = np.maximum(fs2, 0)  # remove numerical noise i.e. negative variances
         Fs2 = np.tile(fs2, (1, 1))
@@ -579,6 +580,46 @@ class GPR(ML):
         prediction = np.reshape( np.reshape(Fmu,(np.prod(Fmu.shape),1)).sum(axis=1) , (-1,1) )
 
         return prediction, predict_variance
+
+    class Likelihood:
+        # Gaussian likelihood
+        def __init__(self, hyp=np.log(0.1)):
+            self.hyp = [np.log(hyp)]
+
+        def __call__(self):
+            return np.exp(2*self.hyp)
+
+    class Mean:
+        # constant mean
+        def __init__(self, constant=0):
+            self.hyp = [constant]
+
+        def __call__(self, x):
+            return self.hyp*np.ones(len(x))
+
+    class Covariance:
+        # RBF covariance
+        def __init__(self):
+            # hyp[0] variance, hyp[1] length scale
+            self.hyp = [0.,0.]
+
+        def signal_variance(self):
+            return np.exp(2*self.hyp[0])
+
+        def __call__(self, x, y, dp=0):
+            length_scale = np.exp(self.hyp[1])
+            signal_variance = np.exp(2 * self.hyp[0])
+            mat = spdist.cdist(x / length_scale, y / length_scale, 'sqeuclidean')
+            exp_mat = signal_variance * np.exp(-0.5 * mat)
+            if dp == 0:
+                return exp_mat
+            elif dp == 1:
+                # derivative of the length scale --> gamma = 1/(2*exp(length scale))
+                return exp_mat * mat
+
+            elif dp == 2:
+                # derivative of the amplitude (variance)
+                return exp_mat * 2.
 
 
 class RBF:
