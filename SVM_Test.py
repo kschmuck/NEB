@@ -5,6 +5,7 @@ import numpy as np
 from pes import gradient, energy, energy_gradient, energy_xy_list, gradient_xy_list
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+# import SVM as sv
 import MLDerivative as sv
 import sklearn as sk
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection, Patch3DCollection
@@ -37,15 +38,17 @@ epsilon = [0.01]#, 0.1]
 # c1 = [10**5,10**5,10**5,10**5]#[10**5]
 # c2 = [10**5,10**5,10**5,10**5]
 # c2 = [0,0,0,0]
-c1 = [10000.]
+c1 = [1.]
 c2 = [1.]
 
-# seed = 123
-# np.random.seed(seed)
+seed = 123
+np.random.seed(seed)
+
 kernel = Kernels.RBF(gamma=gamma)
 for ii in epsilon:
     # method = ['simple', 'irwls', 'rls']
-    method = ['irwls', 'rls', 'gpr']
+    # method = ['irwls', 'rls', 'gpr']
+    method = ['gpr']
     for cc, vv in zip(c1, c2):
         sv_test = []
         # for element in method:
@@ -54,16 +57,21 @@ for ii in epsilon:
         # sv_test.append(sv.RLS(kernel))
         sv_test.append(sv.GPR(kernel))
 
+        # sv_test.append(sv.IRWLS(kernel='rbf', gamma=gamma))
+        # sv_test.append(sv.RLS(kernel='rbf', gamma=gamma))
+        # #
         sk_test = svm.SVR(C=cc, kernel='rbf', gamma=gamma, epsilon=ii)
 
 
-        x_predict = np.linspace(-10*np.pi, 10*np.pi, 1000).reshape(-1,1)
+        x_predict = np.linspace(-20*np.pi, 20*np.pi, 1000).reshape(-1,1)
         # x = np.arange(-5.5*np.pi+np.pi*3.2/2., 5.5*np.pi+np.pi*3.2/2., np.pi)#
         # x = np.linspace(-8 * np.pi, 8 * np.pi, 50).reshape(-1, 1)
         # x = np.array([np.linspace(np.pi, 1.8*np.pi,3), np.linspace(-np.pi, -1.8*np.pi, 3), np.linspace(2.5*np.pi, 3.8*np.pi,3)])
         # x = np.linspace(0*np.pi, 2*np.pi, 50)
-        x = (np.random.rand(20)-0.5)*np.pi*20
-        # x = (np.random.rand(111) - 0.5) * np.pi * 20
+        # x = (np.random.rand(20)-0.5)*np.pi*10
+        # print(np.random.get_state())
+        x = (np.random.rand(10) - 0.5) * np.pi * 10
+
         # x = np.array([1,3])#,-2])#*0.3+1.5
         # x = np.array([np.linspace(-2, -1, 2),np.linspace(1, 2, 2)])
         # x = x_predict
@@ -73,15 +81,16 @@ for ii in epsilon:
 
         sv_val = []
         sk_val = sk_test.predict(x_predict)
-
+        sv_grad_val = []
         for element in sv_test:
-            # element.fit(x, energy_1D(x).reshape(-1), C1=cc, C2=vv) # np.zeros([0,1]), np.zeros(0), x_prime=x, y_prime=gradient_1D(x).reshape(-1)
+            element.fit(x, energy_1D(x).reshape(-1)) # np.zeros([0,1]), np.zeros(0), x_prime=x, y_prime=gradient_1D(x).reshape(-1)
             # element.fit(np.zeros([0,1]), np.zeros(0), x_prime=x, y_prime=gradient_1D(x).reshape(-1), C1=cc, C2=vv)
-            element.fit(x, energy_1D(x).reshape(-1), x_prime_train=x, y_prime_train=gradient_1D(x).reshape(-1, 1), C1=cc, C2=vv)#, epsilon=ii, C1=cc, C2=vv, eps=10**-6, max_iter=10**4, error_cap=10**-8)
+            # element.fit(x, energy_1D(x).reshape(-1), x_prime_train=x, y_prime_train=gradient_1D(x).reshape(-1, 1), C1=cc, C2=vv)#, epsilon=ii, C1=cc, C2=vv, eps=10**-6, max_iter=10**4, error_cap=10**-8)
             sv_val.append(element.predict(x_predict))
-            print(element.covariance(x))
+            # sv_grad_val.append(element.predict_derivative(x_predict))
+            # print(element.covariance(x))
             # print(np.max(element.alpha))
-            print('N alpha = ' + str(len(element._support_index_alpha)) + ' N beta = ' + str(np.shape(element._support_index_beta)) + ' b = ' + str(element._intercept))
+            # print('N alpha = ' + str(len(element._support_index_alpha)) + ' N beta = ' + str(np.shape(element._support_index_beta)) + ' b = ' + str(element._intercept))
 
         color = ['g', 'b', 'r']
         fig = plt.figure()
@@ -89,13 +98,29 @@ for ii in epsilon:
         plt.plot(x_predict, energy_1D(x_predict)+ii, color='k', ls='--', alpha=0.4)
         plt.plot(x_predict, energy_1D(x_predict)-ii, color='k', ls='--', alpha=0.4)
         plt.plot(x, energy_1D(x), ls='None', color='k', marker='o', label='Training Points', alpha=0.4)
+        var = np.array(np.sqrt(sv_val[0][1])).reshape(-1)
         for jj in range(len(sv_test)):
-            plt.plot(x_predict, sv_val[jj], color=color[jj], label=method[jj])
+            plt.plot(x_predict, sv_val[jj][0], color=color[jj], label=method[jj])
+            plt.fill_between(x_predict.reshape(-1), sv_val[jj][0].reshape(-1)+ 2. * var, sv_val[jj][0].reshape(-1) - 2. * var, facecolor=[0.7539, 0.89453125, 0.62890625, 1.0], linewidths=0.0)
             # plt.plot(x_support, energy_1D(x_support), ls='None', color='r', marker='o')
             # plt.plot(der_support, energy_1D(der_support), ls='None', color='b', marker='x')
         plt.title('epsilon = ' + str(ii) + ' c1 = ' + str(cc) + ' c2 = ' + str(vv))
         plt.plot(x_predict, sk_val, color='y', label='scikit', ls='--')
         plt.legend()
+
+        # color = ['g', 'b', 'r']
+        # fig = plt.figure()
+        # plt.plot(x_predict, gradient_1D(x_predict), ls='--', color='k', label='True Path')
+        # plt.plot(x_predict, gradient_1D(x_predict)+ii, color='k', ls='--', alpha=0.4)
+        # plt.plot(x_predict, gradient_1D(x_predict)-ii, color='k', ls='--', alpha=0.4)
+        # plt.plot(x, gradient_1D(x), ls='None', color='k', marker='o', label='Training Points', alpha=0.4)
+        # for jj in range(len(sv_test)):
+        #     plt.plot(x_predict, sv_val[jj], color=color[jj], label=method[jj])
+        #     # plt.plot(x_support, energy_1D(x_support), ls='None', color='r', marker='o')
+        #     # plt.plot(der_support, energy_1D(der_support), ls='None', color='b', marker='x')
+        # plt.title('epsilon = ' + str(ii) + ' c1 = ' + str(cc) + ' c2 = ' + str(vv))
+        # # plt.plot(x_predict, sk_val, color='y', label='scikit', ls='--')
+        # plt.legend()
         plt.show()
         # print('-----------------------------------------------------------')
 
