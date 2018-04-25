@@ -2,8 +2,12 @@ import numpy as np
 import scipy.optimize._minimize as spmin
 import matplotlib.pyplot as plt
 import scipy as sp
+from scipy.linalg import cho_solve, cholesky
+import copy as cp
+
 import scipy.optimize as sp_opt
 import scipy.spatial.distance as spdist
+
 
 class ML:
     """ Parent class for the surface fitting
@@ -141,7 +145,7 @@ class ML:
 
         return k, g, k_prime, j
 
-    def _create_mat_part(self, x, y, dxy=0):
+    def _create_mat_part(self, x, y, dxy=0, dp=0):
         """
         creates parts of the matrix
         caution if dxy = 0 x, y are both function pattern
@@ -155,7 +159,7 @@ class ML:
         :return: in case of dxy = 1 two matrix's are returned else just one
         """
         if dxy == 0:
-            return self.kernel(x, y)
+            return self.kernel(x, y, dp=dp)
 
         elif dxy == 1:
             g = np.zeros([len(x), len(y)*len(y[0])])
@@ -163,7 +167,7 @@ class ML:
             for ii in range(0, len(y[0])):
                 ind1 = [ii * len(y), (ii + 1) * len(y)]
                 ind2 = [0, len(x)]
-                g[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(y, x, dx=ii+1, dy=0)
+                g[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(x, y, dx=ii+1, dy=0, dp=dp)
                 # k_prime[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(y, x, dy=0, dx=ii+1)
 
             return g, g.T
@@ -172,9 +176,9 @@ class ML:
             j = np.zeros([len(x)*len(x[0]), len(y)*len(y[0])])
             for ii in range(0, len(x[0])):
                 for jj in range(0, len(y[0])):
-                    ind1 = [ii * self.n_samples_prime, (ii + 1) * self.n_samples_prime]
-                    ind2 = [jj * self.n_samples_prime, (jj + 1) * self.n_samples_prime]
-                    j[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(x, y, dx=ii + 1, dy=jj + 1)
+                    ind1 = [ii * len(x), (ii + 1) * len(x)]
+                    ind2 = [jj * len(y), (jj + 1) * len(y)]
+                    j[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(x, y, dx=ii + 1, dy=jj + 1, dp=dp)
             return j
 
     def _invert_mat(self, mat):
@@ -195,6 +199,31 @@ class ML:
         inv_mat[self.n_samples:, self.n_samples:] = d_inv + d_inv.dot(c.dot(w))
 
         return inv_mat
+
+    def _mat(self, x=None, y=None, dp=0):
+        """ creates the kernel matrix
+            x = None is default value for creation of the training matrix
+            if  x is not None -> the matrix is created with respect to x and the training points (x_train, x_prime_train)
+        """
+        if dp==0:
+            k, g, k_prime, j = self._create_mat()
+            mat = np.zeros([self.n_samples + self.n_dim * self.n_samples_prime,
+                            self.n_samples + self.n_dim * self.n_samples_prime])
+            mat[:self.n_samples, :self.n_samples] = k
+            mat[:self.n_samples, self.n_samples:] = g
+            mat[self.n_samples:, :self.n_samples] = k_prime
+            mat[self.n_samples:, self.n_samples:] = j
+        else:
+            if self.n_samples_prime !=0:
+                mat = np.zeros([self.n_samples + self.n_dim * self.n_samples_prime,
+                                self.n_samples + self.n_dim * self.n_samples_prime])
+                mat[:self.n_samples, :self.n_samples] = self._create_mat_part(self.x_train, self.x_train, dp=dp)
+                mat[:self.n_samples, self.n_samples:] = self._create_mat_part(self.x_train, self.x_prime_train, dp=dp)
+                mat[self.n_samples:, :self.n_samples] = mat[:self.n_samples, self.n_samples:].T
+                mat[self.n_samples:, self.n_samples:] = self._create_mat_part(self.x_prime_train, self.x_prime_train, dp=dp)
+            else:
+                mat = self._create_mat_part(self.x_train, self.x_train, dp=dp)
+        return mat
 
 
 class IRWLS(ML):
@@ -470,178 +499,197 @@ class RLS(ML):
 
 
 class GPR(ML):
-    # Todo optimize hyperparameters (minimizing them with respect to mean+liklihood+covariance
-    # Todo use of hyperparameters
-    # Todo covariance matrix --> RBF two hyperparameter
-    # Todo liklihood --> gaussian one hyperparamter
-    # Todo mean function --> constant mean --> mean for all is [mean(y), mean(y_prime)]
+    # Todo derivatives fails--> probably kernel is wrong?
     def __init__(self, kernel):
         # RBF kernel only supported and a constant mean over all training points
-        # 1:2 covariance [length scale, signal variance], 3 likelihood [variance], 0 mean [constant]
-        # self.hyper_parameter = np.array([0.0, 0.0, 0.0, np.log(.1)])
-
         # cholesky matrix
         self.L = None
-        self.noise_precesion = None
-        self.y = None
+        self.y_mean = None
+        self.y_prime_mean = None
 
-        self.likelihood = self.Likelihood()
-        self.mean = self.Mean()
+        self._y_vec = None
+        # noise is added to the main diagonal of the kernel matrix
+        # this is done in the log marginal likelihood
 
-        ML.__init__(self, self.Covariance())
-        # self.set_hyper_parameters_rbf_kernel()
+        self.noise = None
 
-    def fit(self, x_train, y_train):
-        self.x_train = x_train
-        self.y_train = y_train
-        self.n_samples = len(x_train)
-        # self.hyper_parameter[3] = np.mean(y_train)
-        self.hyper_parameter[0] = np.mean(y_train)
+        ML.__init__(self, kernel)
 
-        hyper_parameter = self.hyper_parameter
-        testarray = np.array([3.27256261, 1.62061382, 1.25046715,-9.44355913])
-        debugging = self.optimize(testarray)
-        debugging = self.derivative_optimize(testarray)
-        opt = sp_opt.fmin_cg(self.optimize, hyper_parameter, self.derivative_optimize, full_output=True, disp=True, maxiter=1000)
-        hyper_parameter = opt[0]
-        likelihood_value = opt[1]
-        # print(opt[1])
-        # if opt[4] != 0:
-        #     search_range = 4# -5, 5
-        #     hyper_rand = hyper_parameter
-        #     for ii in range(30):
-        #         hyper_rand[1:4] = (np.random.randn(3)-0.5)*search_range
-        #         opt = sp_opt.fmin_cg(self.optimize, hyper_rand, self.derivative_optimize, full_output=True, disp=False)
-        #         print(opt[1])
-        #         if opt[1] < likelihood_value:
-        #             likelihood_value = opt[1]
-        #             hyper_parameter = hyper_rand
-        self.hyper_parameter = hyper_parameter
-        self.log_marginal_likelihood()
+    def get_hyper_parameter(self):
+        return np.array(self.kernel.get_hyper_parameters()).reshape(-1)
+
+    def set_hyper_parameter(self, hyper_parameter):
+        self.kernel.set_hyper_parameters(hyper_parameter)
+
+    def get_bounds(self):
+        bounds = []
+        for element in self.kernel.bounds:
+            bounds.append(element)
+        return np.log(np.array(bounds))
+
+    def create_mat(self, x1, x2, x1_prime=None, x2_prime=None, dp=0):
+        n, d = x1.shape
+        m, f = x2.shape
+        if f != d:
+            raise ValueError('input differs in dimensions')
+
+        if x1_prime is None and x2_prime is None:
+            return self.kernel(x1, x2, dp)
+        else:
+            k_mat = np.zeros([n+n*d, m+m*f])
+            k_mat[:n, :m] = self.kernel(x1, x2, dp=dp)
+            for ii in range(d):
+                for jj in range(f):
+                    k_mat[:n, m+m*ii:m+m*(ii+1)] = self.kernel(x1_prime, x2, dx=ii+1, dp=dp)
+                    k_mat[n+n*jj:n*(jj+2), m+m*ii:m+m*(ii+1)] = self.kernel(x1_prime, x2_prime, dx=ii+1, dy=jj+1, dp=dp)
+
+            if n == m:
+                k_mat[n:, :m] = k_mat[:n, m:].T
+            else: # true if kernel is RBF
+                k_mat[n:, :m] = -k_mat[:n, m:]
+            return k_mat
+
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10):
+        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+        self.noise = noise
+        self.y_mean = np.mean(y_train)
+        if self.x_prime_train is None:
+
+            self._y_vec = np.concatenate([self.y_train - self.y_mean])
+            self.kernel.hyper_parameter[-1] = self.y_mean
+        else:
+            self.y_prime_mean = np.mean(y_prime_train, axis=0)
+            self._y_vec = np.concatenate([self.y_train - self.y_mean, (self.y_prime_train - self.y_prime_mean).flatten()])
+            # self.kernel.bounds.append((10**-5, 10**5))
+            # self.kernel.add_hyper_parameter(np.array([np.exp(0.)]))
+
+        initial_hyper_parameters = self.get_hyper_parameter()
+        # self.optimize(initial_hyper_parameters)
+        # self.get_bounds()
+        opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameters,
+                                                                    bounds=self.get_bounds())
+
+        self.set_hyper_parameter(opt_hyper_parameter)
+
+        if self.n_samples_prime == 0:
+            K = self.kernel(self.x_train, self.x_train)
+            K += np.eye(K.shape[0]) * self.noise
+            self.L, alpha = self._cholesky(K)
+            self._alpha = alpha
+
+        else:
+            k_mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
+            # k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples) * self.noise
+            k_mat += self.noise*np.eye(k_mat.shape[0])
+            self.L, alpha = self._cholesky(k_mat)
+            self._alpha = alpha[:self.n_samples]
+            self._beta = alpha[self.n_samples:].reshape(-1, self.n_dim)
+
+        # print(self.y_mean)
+        self._intercept = self.y_mean
+        # print('---------- finish fitting ---------------')
 
     def optimize(self, hyper_parameter):
-        self.hyper_parameter = hyper_parameter
-        self.set_hyper_parameters_rbf_kernel()
-        return -self.log_marginal_likelihood()
+        self.set_hyper_parameter(hyper_parameter)
+        # print(hyper_parameter)
+        log_marginal_likelihood, d_log_marginal_likelihood = self.log_marginal_likelihood(derivative=True)
+        # print(-log_marginal_likelihood)
+        return -log_marginal_likelihood, -d_log_marginal_likelihood
 
-    def derivative_optimize(self, hyper_parameter):
-        self.hyper_parameter = hyper_parameter
-        self.set_hyper_parameters_rbf_kernel()
-        return self.derivative_log_margina_likelihood()
+    def log_marginal_likelihood(self, derivative=False):
+        # gives vale of log marginal likelihood with the gradient
+        if self.n_samples_prime == 0:
+            k_mat = self.kernel(self.x_train, self.x_train)
+            k_mat += np.eye(k_mat.shape[0]) * self.noise
+        else:
+            k_mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
+            # k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples)*self.noise
+            # k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime)*10**-2*self.noise
+        # check_matrix(k_mat)
+        k_mat += np.eye(k_mat.shape[0]) * self.noise
+        L, alpha = self._cholesky(k_mat)
+        log_mag_likelihood = -0.5*self._y_vec.dot(alpha) - np.log(np.diag(L)).sum() - L.shape[0]/2.*np.log(2*np.pi)
 
-    def log_marginal_likelihood(self):
-        m = self.hyper_parameter[0]*np.ones(self.n_samples)
-        K = self.kernel(self.x_train, self.x_train)
-        likelihood_noise_variance = np.exp(2*self.hyper_parameter[3])
+        if not derivative:
+            return log_mag_likelihood
 
-        L = np.linalg.cholesky(K/likelihood_noise_variance+np.eye(self.n_samples)).T
-        alpha = np.linalg.solve(L, np.linalg.solve(L.T, self.y_train- m))/likelihood_noise_variance
-        self._alpha = alpha
-        self.noise_precesion = np.ones([self.n_samples, 1]) / np.sqrt(likelihood_noise_variance)
-        self.L = L
+        temp = (np.multiply.outer(alpha, alpha) - cho_solve((L, True), np.eye(L.shape[0])))[:, :, np.newaxis]
+        # alpha.dot(alpha.T) - cho_solve((L, True), np.eye(L.shape[0]))
+        d_log_mag_likelihood = []
 
-        nlz = -0.5*np.dot(self.y_train-m, alpha) - np.log(np.diag(L)).sum() - self.n_samples*np.log(2*np.pi*likelihood_noise_variance)/2.
-        return nlz
+        if self.n_samples_prime == 0:
+            for pp in range(len(self.get_hyper_parameter())):
+                k_grad = self.kernel(self.x_train, self.x_train, dx=0, dy=0, dp=pp+1)
 
-    def derivative_log_margina_likelihood(self):
-        likelihood_noise_variance = np.exp(2 * self.hyper_parameter[3])
-        K = self.kernel(self.x_train, self.x_train)
-        m = self.hyper_parameter[0]*np.ones(self.n_samples)
+                # d_log_mag_likelihood.append(0.5*np.trace(temp*k_grad))
+                d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
+        else:
+            # temp = (np.multiply.outer(alpha, alpha) - cho_solve((L, True), np.eye(L.shape[0])))#[:, :, np.newaxis]
 
-        L = np.linalg.cholesky(K / likelihood_noise_variance + np.eye(self.n_samples)).T
-        alpha = np.linalg.solve(L, np.linalg.solve(L.T, self.y_train - m))/likelihood_noise_variance
+            for pp in range(1, len(self.kernel.hyper_parameter) + 1):
+                k_grad = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train,
+                                         x2_prime=self.x_prime_train, dp=pp)
 
-        dnlz = np.zeros(len(self.hyper_parameter))
-        Q = 1./likelihood_noise_variance*np.linalg.solve(L, np.linalg.solve(L.T, np.eye(self.n_samples))) - np.dot(alpha.reshape(-1,1), alpha.reshape(-1,1).T)
-        dnlz[0] = -np.sum(alpha) # mean
-        dnlz[1] = 0.5*(Q*self.kernel(self.x_train, self.x_train, dp=1)).sum()
-        dnlz[2] = 0.5*(Q*self.kernel(self.x_train, self.x_train, dp=2)).sum()
-        dnlz[3] = np.trace(Q)*likelihood_noise_variance # likelihood
+                d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
+                # d_log_mag_likelihood.append(0.5*np.trace(temp*k_grad))
 
-        return dnlz
+        d_log_mag_likelihood = np.array([d_log_mag_likelihood]).flatten()
+        # print('derivatives = ' + str(d_log_mag_likelihood))
+        # print(log_mag_likelihood)
+        return log_mag_likelihood, d_log_mag_likelihood
 
-    def set_hyper_parameters_rbf_kernel(self):
-        self.kernel.gamma = self.hyper_parameter[1] #1./np.exp(0.5*)
-        self.kernel.amplitude = self.hyper_parameter[2]#np.exp(2*)
+    def _cholesky(self, kernel):
+        # check_matrix(kernel)
+        try:
+            L = cholesky(kernel, lower=True)
+        except np.linalg.LinAlgError:
+            check_matrix(kernel)
+            print(self.get_hyper_parameter())
+            # implement automatic increasing noise
+            raise Exception('failed')
+        alpha = cho_solve((L, True), self._y_vec)
+        return L, alpha
 
     def predict(self, x):
-        n = len(x)
-        K = np.exp(2*self.hyper_parameter[2])*np.exp(-0.5*np.zeros([n, 1]))
-        K_cross = self.kernel(self.x_train, x)
-        m = self.hyper_parameter[0]*np.ones(n)
+        # print(self.get_hyper_parameter())
+        if self.n_samples_prime == 0:
 
-        Fmu = m + np.dot(K_cross.T, self._alpha)
-        V = np.linalg.solve(self.L.T, np.tile(self.noise_precesion, (1, n)) * K_cross)
-        fs2= K - np.array([(V * V).sum(axis=0)]).T
-        fs2 = np.maximum(fs2, 0)  # remove numerical noise i.e. negative variances
-        Fs2 = np.tile(fs2, (1, 1))
-        Fs2 += np.exp(2*self.hyper_parameter[3])
-        predict_variance = np.reshape(np.reshape(Fs2,(np.prod(Fs2.shape),1)).sum(axis=1), (-1,1))
-        prediction = np.reshape( np.reshape(Fmu,(np.prod(Fmu.shape),1)).sum(axis=1) , (-1,1) )
+            predictive_mean = (self.kernel(x, self.x_train).dot(self._alpha)) + self._intercept
 
-        return prediction, predict_variance
+            v = cho_solve((self.L, True), self.kernel(self.x_train, x))
 
-    class Likelihood:
-        # Gaussian likelihood
-        def __init__(self, hyp=np.log(0.1)):
-            self.hyp = [np.log(hyp)]
+            mat = self.kernel(x, x)
+            predictive_covariance = mat - self.kernel(self.x_train, x).T.dot(v)
+            predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
+            predictive_variance = np.diag(predictive_covariance)
 
-        def __call__(self):
-            return np.exp(2*self.hyp)
+        else:
+            k_mat = self.create_mat(self.x_train, x, x1_prime=self.x_prime_train, x2_prime=x)
+            predictive_mean = self._alpha.T.dot(k_mat[:self.n_samples, :x.shape[0]]) + self._intercept + \
+                                sum(self._beta[:, ii].T.dot(k_mat[:self.n_samples, x.shape[0]:]) for ii in range(self.n_dim))
+            # predictive_mean_grad = self._alpha.dot(k_mat[self.n_samples:, :self.n_samples]) + \
+            #                        self._beta.dot(k_mat[self.n_samples:, self.n_samples:])
 
-    class Mean:
-        # constant mean
-        def __init__(self, constant=0):
-            self.hyp = [constant]
+            mat = self.create_mat(x, x, x1_prime=x, x2_prime=x)
+            v = cho_solve((self.L, True), k_mat)
+            predictive_covariance = mat - k_mat.T.dot(v)
+            predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
 
-        def __call__(self, x):
-            return self.hyp*np.ones(len(x))
+            predictive_covariance_grad = predictive_covariance[x.shape[0]:, x.shape[0]:]
+            predictive_covariance = predictive_covariance[:x.shape[0], :x.shape[0]]
 
-    class Covariance:
-        # RBF covariance
-        def __init__(self):
-            # hyp[0] variance, hyp[1] length scale
-            self.hyp = [0.,0.]
+            predictive_variance = np.diag(predictive_covariance)
+            predictive_variance_grad = np.diag(predictive_covariance_grad)
 
-        def signal_variance(self):
-            return np.exp(2*self.hyp[0])
-
-        def __call__(self, x, y, dp=0):
-            length_scale = np.exp(self.hyp[1])
-            signal_variance = np.exp(2 * self.hyp[0])
-            mat = spdist.cdist(x / length_scale, y / length_scale, 'sqeuclidean')
-            exp_mat = signal_variance * np.exp(-0.5 * mat)
-            if dp == 0:
-                return exp_mat
-            elif dp == 1:
-                # derivative of the length scale --> gamma = 1/(2*exp(length scale))
-                return exp_mat * mat
-
-            elif dp == 2:
-                # derivative of the amplitude (variance)
-                return exp_mat * 2.
+        return predictive_mean #, predictive_covariance, predictive_variance
 
 
-class RBF:
-    def __init__(self, gamma=0.0, amplitude=0.):
-        self.gamma = gamma
-        self.amplitude = amplitude
-
-    def __call__(self, x, y, dx=0, dy=0, dp=0):
-        # dp derivative of the parameters is used for the GPR
-        # in case of GPR the gamma have to be redefined outside to gamma = 1/(2*exp(length scale)) because length scale
-        # is the hyper parameter of interest
-        length_scale = np.exp(self.gamma)
-        signal_variance = np.exp(2*self.amplitude)
-        mat = spdist.cdist(x/length_scale, y/length_scale, 'sqeuclidean')
-        exp_mat = signal_variance * np.exp(-0.5* mat)
-        if dp == 0:
-            return exp_mat
-        elif dp == 1:
-            # derivative of the length scale --> gamma = 1/(2*exp(length scale))
-            return exp_mat * mat
-
-        elif dp == 2:
-            # derivative of the amplitude (variance)
-            return exp_mat * 2.
-
+def check_matrix(mat):
+    print('symmertric = ' + str(np.allclose(mat, mat.T, 10**-32)))
+    if not np.allclose(mat, mat.T, 10**-32):
+        raise ValueError('not symmetric')
+    print('derterminante = ' + str(np.linalg.det(mat)))
+    eig_val, eig_vec = np.linalg.eigh(mat)
+    print('eigenvalues = ' + str(eig_val))
+    print('dimension = ' + str(mat.shape))
+    print('----------------')
