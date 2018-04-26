@@ -1,4 +1,5 @@
 import numpy as np
+import Kernels
 import scipy.optimize._minimize as spmin
 import matplotlib.pyplot as plt
 import scipy as sp
@@ -22,6 +23,8 @@ class ML:
         self.n_samples = None
         self.n_samples_prime = None
         self.n_dim = None
+
+        self.y_debug = None
 
         self._is_fitted = False
 
@@ -420,7 +423,7 @@ class RLS(ML):
     See:
     """
 
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, minimze_b=False, C1=1., C2=1.):
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, minimze_b=True, C1=10**10., C2=10**10.):
         """
         Fitting a new model to a given training pattern
         :param x_train: function input pattern shape = [N_samples, N_features]
@@ -478,10 +481,9 @@ class RLS(ML):
                 mat[self.n_samples:-1, :self.n_samples] = k_prime
                 mat[self.n_samples:-1, self.n_samples:-1] = j
                 mat = np.linalg.inv(mat)
-
         weight = mat.dot(vec)
-
         self._alpha = weight[0:self.n_samples].reshape(-1).T
+        self.y_debug = vec
 
         if not minimze_b:
             self._intercept = weight[-1]
@@ -540,13 +542,14 @@ class GPR(ML):
             k_mat[:n, :m] = self.kernel(x1, x2, dp=dp)
             for ii in range(d):
                 for jj in range(f):
-                    k_mat[:n, m+m*ii:m+m*(ii+1)] = self.kernel(x1_prime, x2, dx=ii+1, dp=dp)
-                    k_mat[n+n*jj:n*(jj+2), m+m*ii:m+m*(ii+1)] = self.kernel(x1_prime, x2_prime, dx=ii+1, dy=jj+1, dp=dp)
+                    k_mat[:n, m+m*jj:m*(jj+2)] = self.kernel(x1_prime, x2, dx=jj+1, dy=0, dp=dp)
+                    k_mat[n+n*jj:n*(jj+2), m+m*ii:m+m*(ii+1)] = self.kernel(x1_prime, x2_prime, dx=jj+1, dy=ii+1, dp=dp)
 
             if n == m:
                 k_mat[n:, :m] = k_mat[:n, m:].T
             else: # true if kernel is RBF
                 k_mat[n:, :m] = -k_mat[:n, m:]
+
             return k_mat
 
     def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10):
@@ -559,18 +562,15 @@ class GPR(ML):
             self.kernel.hyper_parameter[-1] = self.y_mean
         else:
             self.y_prime_mean = np.mean(y_prime_train, axis=0)
-            self._y_vec = np.concatenate([self.y_train - self.y_mean, (self.y_prime_train - self.y_prime_mean).flatten()])
-            # self.kernel.bounds.append((10**-5, 10**5))
-            # self.kernel.add_hyper_parameter(np.array([np.exp(0.)]))
+            # self._y_vec = np.concatenate([self.y_train - self.y_mean, (self.y_prime_train - self.y_prime_mean).flatten()])
+            self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten()])
 
         initial_hyper_parameters = self.get_hyper_parameter()
-        # self.optimize(initial_hyper_parameters)
-        # self.get_bounds()
         opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameters,
                                                                     bounds=self.get_bounds())
 
         self.set_hyper_parameter(opt_hyper_parameter)
-
+      
         if self.n_samples_prime == 0:
             K = self.kernel(self.x_train, self.x_train)
             K += np.eye(K.shape[0]) * self.noise
@@ -578,16 +578,15 @@ class GPR(ML):
             self._alpha = alpha
 
         else:
-            k_mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
-            # k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples) * self.noise
+            k_mat = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train, x2_prime=self.x_prime_train)
             k_mat += self.noise*np.eye(k_mat.shape[0])
+
             self.L, alpha = self._cholesky(k_mat)
             self._alpha = alpha[:self.n_samples]
             self._beta = alpha[self.n_samples:].reshape(-1, self.n_dim)
 
-        # print(self.y_mean)
+        self._is_fitted = True
         self._intercept = self.y_mean
-        # print('---------- finish fitting ---------------')
 
     def optimize(self, hyper_parameter):
         self.set_hyper_parameter(hyper_parameter)
@@ -600,12 +599,8 @@ class GPR(ML):
         # gives vale of log marginal likelihood with the gradient
         if self.n_samples_prime == 0:
             k_mat = self.kernel(self.x_train, self.x_train)
-            k_mat += np.eye(k_mat.shape[0]) * self.noise
         else:
             k_mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
-            # k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples)*self.noise
-            # k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime)*10**-2*self.noise
-        # check_matrix(k_mat)
         k_mat += np.eye(k_mat.shape[0]) * self.noise
         L, alpha = self._cholesky(k_mat)
         log_mag_likelihood = -0.5*self._y_vec.dot(alpha) - np.log(np.diag(L)).sum() - L.shape[0]/2.*np.log(2*np.pi)
@@ -614,32 +609,25 @@ class GPR(ML):
             return log_mag_likelihood
 
         temp = (np.multiply.outer(alpha, alpha) - cho_solve((L, True), np.eye(L.shape[0])))[:, :, np.newaxis]
-        # alpha.dot(alpha.T) - cho_solve((L, True), np.eye(L.shape[0]))
         d_log_mag_likelihood = []
 
         if self.n_samples_prime == 0:
             for pp in range(len(self.get_hyper_parameter())):
                 k_grad = self.kernel(self.x_train, self.x_train, dx=0, dy=0, dp=pp+1)
 
-                # d_log_mag_likelihood.append(0.5*np.trace(temp*k_grad))
                 d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
         else:
-            # temp = (np.multiply.outer(alpha, alpha) - cho_solve((L, True), np.eye(L.shape[0])))#[:, :, np.newaxis]
 
             for pp in range(1, len(self.kernel.hyper_parameter) + 1):
                 k_grad = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train,
                                          x2_prime=self.x_prime_train, dp=pp)
 
                 d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
-                # d_log_mag_likelihood.append(0.5*np.trace(temp*k_grad))
 
         d_log_mag_likelihood = np.array([d_log_mag_likelihood]).flatten()
-        # print('derivatives = ' + str(d_log_mag_likelihood))
-        # print(log_mag_likelihood)
         return log_mag_likelihood, d_log_mag_likelihood
 
     def _cholesky(self, kernel):
-        # check_matrix(kernel)
         try:
             L = cholesky(kernel, lower=True)
         except np.linalg.LinAlgError:
@@ -650,38 +638,35 @@ class GPR(ML):
         alpha = cho_solve((L, True), self._y_vec)
         return L, alpha
 
-    def predict(self, x):
+    def predict(self, x, error_estimate=False):
         # print(self.get_hyper_parameter())
         if self.n_samples_prime == 0:
-
             predictive_mean = (self.kernel(x, self.x_train).dot(self._alpha)) + self._intercept
+            if error_estimate:
+                v = cho_solve((self.L, True), self.kernel(self.x_train, x))
 
-            v = cho_solve((self.L, True), self.kernel(self.x_train, x))
-
-            mat = self.kernel(x, x)
-            predictive_covariance = mat - self.kernel(self.x_train, x).T.dot(v)
-            predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
-            predictive_variance = np.diag(predictive_covariance)
+                mat = self.kernel(x, x)
+                predictive_covariance = mat - self.kernel(self.x_train, x).T.dot(v)
+                predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
+                predictive_variance = np.diag(predictive_covariance)
+                return predictive_mean, predictive_variance
+            else:
+                return predictive_mean
 
         else:
-            k_mat = self.create_mat(self.x_train, x, x1_prime=self.x_prime_train, x2_prime=x)
-            predictive_mean = self._alpha.T.dot(k_mat[:self.n_samples, :x.shape[0]]) + self._intercept + \
-                                sum(self._beta[:, ii].T.dot(k_mat[:self.n_samples, x.shape[0]:]) for ii in range(self.n_dim))
-            # predictive_mean_grad = self._alpha.dot(k_mat[self.n_samples:, :self.n_samples]) + \
-            #                        self._beta.dot(k_mat[self.n_samples:, self.n_samples:])
-
-            mat = self.create_mat(x, x, x1_prime=x, x2_prime=x)
-            v = cho_solve((self.L, True), k_mat)
-            predictive_covariance = mat - k_mat.T.dot(v)
-            predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
-
-            predictive_covariance_grad = predictive_covariance[x.shape[0]:, x.shape[0]:]
-            predictive_covariance = predictive_covariance[:x.shape[0], :x.shape[0]]
-
-            predictive_variance = np.diag(predictive_covariance)
-            predictive_variance_grad = np.diag(predictive_covariance_grad)
-
-        return predictive_mean #, predictive_covariance, predictive_variance
+            predictive_mean = self._alpha.dot(self.kernel(self.x_train, x)) + self._intercept \
+                       + sum(self._beta[:, ii].dot(self.kernel(self.x_prime_train, x, dy=ii+1)) for ii in range(self.n_dim))
+            if error_estimate:
+                n, d = x.shape
+                k_mat = self.create_mat(self.x_train, x, x1_prime=self.x_prime_train, x2_prime=x)
+                mat = self.create_mat(x, x, x1_prime=x, x2_prime=x)
+                v = cho_solve((self.L, True), k_mat)
+                predictive_covariance = mat - k_mat.T.dot(v)
+                predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
+                predictive_variance = np.diag(predictive_covariance)[:n]
+                return predictive_mean, predictive_variance
+            else:
+                return predictive_mean
 
 
 def check_matrix(mat):

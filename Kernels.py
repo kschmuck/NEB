@@ -3,7 +3,7 @@ import scipy.spatial.distance as _spdist
 
 
 class RBF:
-    def __init__(self, gamma=0.1):
+    def __init__(self, gamma=0.5):
         self.gamma = gamma
 
     def __call__(self, x, y, dx=0, dy=0, dp=0):
@@ -71,7 +71,7 @@ class newRBFGrad:
         if len(self.hyper_parameter) == 3:
             signal_variance =(self.hyper_parameter[0]) # amplitude
             length_scale = (self.hyper_parameter[1])
-            bias = self.hyper_parameter[2]
+            bias = 0#self.hyper_parameter[2]
             distance = _spdist.cdist(x/length_scale, y/length_scale, metric='sqeuclidean')
 
             exp_mat_func = _np.exp(-0.5*distance)
@@ -83,10 +83,10 @@ class newRBFGrad:
                     else:
                         return signal_variance / length_scale ** 2 * exp_mat_func \
                                     * (1 - _np.subtract.outer(x[:, dx - 1], y[:, dx - 1])**2 / length_scale**2)
-                elif dy == 0: # dx == i
-                    return -signal_variance * exp_mat_func * _np.subtract.outer(x[:, dx-1], y[:, dx-1])/length_scale**2
                 elif dx == 0:
-                    return signal_variance * exp_mat_func * _np.subtract.outer(x[:, dy-1], y[:, dy-1])/length_scale**2
+                    return -signal_variance * exp_mat_func * _np.subtract.outer(x[:, dy-1], y[:, dy-1])/length_scale**2
+                elif dy == 0: # dx == i
+                    return signal_variance * exp_mat_func * _np.subtract.outer(x[:, dx-1], y[:, dx-1])/length_scale**2
                 else:
                     return -signal_variance / length_scale**4 * _np.subtract.outer(x[:, dx-1], y[:, dx-1])\
                            * _np.subtract.outer(x[:, dy-1], y[:, dy-1]) * exp_mat_func
