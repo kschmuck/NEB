@@ -14,6 +14,7 @@ from sklearn.base import clone
 from sklearn.externals.funcsigs import signature
 
 # TODO Exponentiation Class  derivative with respect to x, y
+# TODO Matern Class  derivative with respect to x, y
 # ToDo modify description
 
 def _check_length_scale(X, length_scale):
@@ -658,8 +659,8 @@ class Sum(KernelOperator):
         """
 
         if eval_gradient:
-            K1, K1_gradient = self.k1(X, Y, eval_gradient=True)
-            K2, K2_gradient = self.k2(X, Y, eval_gradient=True)
+            K1, K1_gradient = self.k1(X, Y, dx=dx, dy=dy, eval_gradient=True)
+            K2, K2_gradient = self.k2(X, Y, dx=dx, dy=dy, eval_gradient=True)
 
             if dx != 0 or dy != 0:
                  if isinstance(self.k1, ConstantKernel):
@@ -752,8 +753,8 @@ class Product(KernelOperator):
             is True.
         """
         if eval_gradient:
-            K1, K1_gradient = self.k1(X, Y, eval_gradient=True)
-            K2, K2_gradient = self.k2(X, Y, eval_gradient=True)
+            K1, K1_gradient = self.k1(X, Y, dx=dx, dy=dy, eval_gradient=True)
+            K2, K2_gradient = self.k2(X, Y, dx=dx, dy=dy, eval_gradient=True)
 
             if dx != 0 or dy != 0:
                 if isinstance(self.k1, ConstantKernel):
@@ -763,15 +764,24 @@ class Product(KernelOperator):
                     K2_gradient = np.zeros_like(K2_gradient)
                     K2 = np.zeros_like(K2)
 
+                K1_0, K1_gradient_0 = self.k1(X, Y, eval_gradient=True)
+                K2_0, K2_gradient_0 = self.k2(X, Y, eval_gradient=True)
+
+                return K1*K2_0 + K2 * K1_0, \
+                       np.dstack((K1_gradient * K2_0[:, :, np.newaxis] + K1_gradient_0 * K2[:, :, np.newaxis],
+                                  K2_gradient * K1_0[:, :, np.newaxis]+ K2_gradient_0 * K1[:, :, np.newaxis]))
+
             return K1 * K2, np.dstack((K1_gradient * K2[:, :, np.newaxis], K2_gradient * K1[:, :, np.newaxis]))
         else:
-            K1 = self.k1(X, Y, eval_gradient=False)
-            K2 = self.k2(X, Y, eval_gradient=False)
+            K1 = self.k1(X, Y, dx=dx, dy=dy, eval_gradient=False)
+            K2 = self.k2(X, Y, dx=dx, dy=dy, eval_gradient=False)
             if dx != 0 or dy != 0:
                 if isinstance(self.k1, ConstantKernel):
                     K1 = np.zeros_like(K1)
                 if isinstance(self.k2, ConstantKernel):
                     K2 = np.zeros_like(K2)
+                return K1*self.k2(X, Y, dx=0, dy=0, eval_gradient=False) \
+                       + K2 * self.k1(X, Y, dx=0, dy=0, eval_gradient=False)
             return K1 * K2
 
     def diag(self, X):
@@ -1049,7 +1059,6 @@ class ConstantKernel(StationaryKernelMixin, Kernel):
         return "{0:.3g}**2".format(np.sqrt(self.constant_value))
 
 
-
 class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
     """Radial-basis function kernel (aka squared-exponential kernel).
 
@@ -1129,43 +1138,41 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
         if not self.anisotropic or length_scale.shape[0] == 1:
             if dx != 0 or dy != 0:
                 if dx == dy:
-                    K = K * (1 - np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])**2 / length_scale) / length_scale**2
+                    K = K * (1 - np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])**2 / length_scale**2) / length_scale**2
                 elif dx == 0:
-                    K = -K *np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])/length_scale**2
+                    K = K * np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])/length_scale**2
                 elif dy == 0:
-                    K = K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])/length_scale**2
+                    K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])/length_scale**2
                 else:
                     K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])*np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])\
                                  /length_scale**4
         else:
             if dx != 0 or dy != 0:
                 if dx == dy:
-                    K = K * (1 - np.subtract.outer(X[:,dx-1], Y[:, dx-1])**2/length_scale[dx-1]**2)\
+                    K = K * (1 - np.subtract.outer(X[:,dx-1].T, Y[:, dx-1])**2/length_scale[dx-1]**2)\
                              /length_scale[dx-1]**2
                 elif dx == 0:
-                    K = K * np.subtract.outer(X[:, dy-1], Y[:, dy-1])/length_scale[dy-1]**2
+                    K = K * np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])/length_scale[dy-1]**2
                 elif dy == 0:
-                    K = K * np.subtract.outer(X[:, dx-1], Y[:, dx-1])/length_scale[dx-1]**2
+                    K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])/length_scale[dx-1]**2
                 else:
-                    K = - K * np.subtract.outer(X[:, dx-1], Y[:, dx-1])*np.subtract.outer(X[:, dy-1], Y[:, dy-1])\
-                             /(length_scale[dx-1]**2*length_scale[dy-1]**2)
+                    K = - K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])*np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])\
+                             / (length_scale[dx-1]**2 * length_scale[dy-1]**2)
 
         if eval_gradient:
             if self.hyperparameter_length_scale.fixed:
                 # Hyperparameter l kept fixed
                 return K, np.empty((X.shape[0], Y.shape[0], 0))
             elif not self.anisotropic or length_scale.shape[0] == 1:
-                if dx == 0 and dy ==0:
+                if dx == 0 and dy == 0:
                     K_gradient = (K * dists)[:, :, np.newaxis]
                 elif (dx != 0 and dy == 0) or (dx == 0 and dy != 0):
-                    K_gradient = (K * (dists - 1))[:, :, np.newaxis]
+                    K_gradient = (K * (dists - 2))[:, :, np.newaxis]
                 else:
                     if dx == dy:
-                        K_gradient = (np.exp(-.5 * dists)*((dists-1)/length_scale**2+(2-dists)
-                                    *np.subtract.outer(X[:, dx-1], Y[:, dx-1])**2/length_scale**2))[:, :, np.newaxis]
+                        K_gradient = (np.exp(-.5 * dists)/length_scale**2*(dists - 2 - dists * (dists - 4)))[:, :, np.newaxis]
                     else:
-                        K_gradient = (K
-                                      * (dists - 2))[:, :, np.newaxis]
+                        K_gradient = (np.exp(-.5 * dists) * dists/length_scale**2 * (4 - dists))[:, :, np.newaxis]
                 return K, K_gradient
             elif self.anisotropic:
 
@@ -1176,7 +1183,7 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
 
                 elif (dx != 0 and dy == 0) or (dy != 0 and dx == 0):
                     K_gradient = grad * K[..., np.newaxis]
-                    K_gradient[:, :, dx-1] = K_gradient[:, :, dx-1] - K
+                    K_gradient[:, :, dx-1] = K_gradient[:, :, dx-1] - 2*K
                 else:
                     if dx == dy:
                         K_gradient = grad * K[..., np.newaxis]
@@ -1199,3 +1206,30 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
             return "{0}(length_scale={1:.3g})".format(
                 self.__class__.__name__, np.ravel(self.length_scale)[0])
 
+
+
+class OLDRBF:
+    def __init__(self, gamma=1.):
+        self.gamma = gamma
+
+    def __call__(self, x, y, dx=0, dy=0, eval_gradient=0):
+        # dp derivative of the parameters is used for the GPR
+        # in case of GPR the gamma have to be redefined outside to gamma = 1/(2*exp(length scale)) because length scale
+        # is the hyper parameter of interest
+        # mat = _np.tile(_np.sum(x ** 2, axis=1), (len(y), 1)).T + _np.tile(_np.sum(y ** 2, axis=1),
+        #                                                                   (len(x), 1)) - 2 * x.dot(y.T)
+        mat = _spdist.cdist(x/self.gamma, y/self.gamma, 'sqeuclidean')
+        exp_mat = np.exp(-0.5* mat)
+        if dx == dy:
+            if dx == 0:
+                return exp_mat
+            else:
+                return -1.0 /self.gamma * exp_mat * (
+                    1.0 / self.gamma * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1]) ** 2 - 1)
+        elif dx == 0:
+            return -1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
+        elif dy == 0:
+            return 1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1])
+        else:
+            return -2.0 / self.gamma ** 2 * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1]) \
+                   * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])

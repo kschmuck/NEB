@@ -69,7 +69,7 @@ class ML:
                 return self._alpha[self._support_index_alpha].dot(self.kernel(
                     self.x_train[self._support_index_alpha], x)) + sum(
                     self._beta[self._support_index_beta[ii], ii].dot(self.kernel(
-                        self.x_prime_train[self._support_index_beta[ii]], x, dy=ii+1)) for ii in range(self.n_dim)) \
+                        self.x_prime_train[self._support_index_beta[ii]], x, dx=ii+1)) for ii in range(self.n_dim)) \
                        + self._intercept
 
             elif self.n_samples != 0:
@@ -78,7 +78,7 @@ class ML:
 
             else:
                 return sum(self._beta[self._support_index_beta[ii], ii].dot(self.kernel(
-                    self.x_prime_train[self._support_index_beta[ii]], x, dy=ii+1)) for ii in range(self.n_dim))
+                    self.x_prime_train[self._support_index_beta[ii]], x, dx=ii+1)) for ii in range(self.n_dim))
 
         else:
             raise ValueError('not fitted yet')
@@ -94,20 +94,20 @@ class ML:
             if self.n_samples_prime != 0 and self.n_samples != 0:
                 for ii in range(self.n_dim):
                     ret_mat[:, ii] = self._alpha[self._support_index_alpha].dot(self.kernel(
-                        self.x_train[self._support_index_alpha], x, dx=ii+1)) \
+                        self.x_train[self._support_index_alpha], x, dy=ii+1)) \
                                      + sum([self._beta[self._support_index_beta[jj], jj].dot(self.kernel(
-                        self.x_prime_train[self._support_index_beta[jj]], x, dx=ii+1, dy=jj+1)) for jj in
+                        self.x_prime_train[self._support_index_beta[jj]], x, dy=ii+1, dx=jj+1)) for jj in
                         range(self.n_dim)])
 
             elif self.n_samples != 0:
                 for ii in range(self.n_dim):
                     ret_mat[:, ii] = self._alpha[self._support_index_alpha].dot(self.kernel(
-                        self.x_train[self._support_index_alpha], x, dx=ii+1))
+                        self.x_train[self._support_index_alpha], x, dy=ii+1))
 
             else:
                 for ii in range(self.n_dim):
                     ret_mat[:, ii] = sum([self._beta[self._support_index_beta[jj], jj].dot(self.kernel(
-                        self.x_prime_train[self._support_index_beta[jj]], x, dx=ii+1, dy=jj+1)) for jj in
+                        self.x_prime_train[self._support_index_beta[jj]], x, dy=ii+1, dx=jj+1)) for jj in
                         range(self.n_dim)])
             return ret_mat
         else:
@@ -119,7 +119,7 @@ class ML:
         :param x: prediction pattern, for derivative and function value the same shape = [N_samples, N_features]
         :return: function value prediction, derivative prediction
         """
-        x = x.reshape(-1,2)
+        x = x.reshape(-1,self.n_dim)
         return self.predict(x), self.predict_derivative(x).reshape(-1), None
 
 
@@ -550,7 +550,7 @@ class RLS(ML):
         self._support_index_beta = []
         for ii in range(self.n_dim):
             self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
-
+        self.debug = kernel_mat
         self._is_fitted = True
 
 
@@ -573,25 +573,13 @@ class GPR(ML):
         ML.__init__(self, kernel)
 
     def get_hyper_parameter(self):
-        if isinstance(self.kernel, Kernels.OLDRBFGrad):
-            return np.log(self.kernel.hyper_parameter)
-        else:
-            return self.kernel.theta
+        return self.kernel.theta
 
     def set_hyper_parameter(self, hyper_parameter):
-        if isinstance(self.kernel, Kernels.OLDRBFGrad):
-            self.kernel.hyper_parameter = np.exp(hyper_parameter)
-        else:
-            self.kernel.theta = hyper_parameter
+        self.kernel.theta = hyper_parameter
 
     def get_bounds(self):
-        if isinstance(self.kernel, Kernels.OLDRBFGrad):
-            bounds = []
-            for element in self.kernel.bounds:
-                bounds.append(element)
-            return np.log(np.array(bounds))
-        else:
-            return self.kernel.bounds
+        return self.kernel.bounds
         #
 
     def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10, restarts=0,
@@ -604,12 +592,14 @@ class GPR(ML):
         else:
             self.y_prime_mean = np.mean(y_prime_train, axis=0)
             self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten()])
+            # self._y_vec = np.concatenate([self.y_train, self.y_prime_train.flatten()])
 
         self.optimize(self.get_hyper_parameter())
         initial_hyper_parameters = self.get_hyper_parameter()
         opt_hyper_parameter = []
         value = []
         opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
+
         opt_hyper_parameter.append(opt[0])
         value.append(opt[1])
 
@@ -704,6 +694,7 @@ class GPR(ML):
         # print(self.get_hyper_parameter())
         if self.n_samples_prime == 0:
             predictive_mean = (self.kernel(x, self.x_train).dot(self._alpha)) + self._intercept
+
             if error_estimate:
                 v = cho_solve((self.L, True), self.kernel(self.x_train, x))
 
@@ -717,11 +708,11 @@ class GPR(ML):
 
         else:
             predictive_mean = self._alpha.dot(self.kernel(self.x_train, x)) + self._intercept \
-                       + sum(self._beta[:, ii].dot(self.kernel(self.x_prime_train, x, dy=ii+1)) for ii in range(self.n_dim))
+                       + sum(self._beta[:, ii].dot(self.kernel(self.x_prime_train, x, dx=ii+1)) for ii in range(self.n_dim))
             if error_estimate:
                 n, d = x.shape
-                k_mat = self.create_mat(self.x_train, x, x1_prime=self.x_prime_train, x2_prime=x)
-                mat = self.create_mat(x, x, x1_prime=x, x2_prime=x)
+                k_mat = create_mat(self.kernel, self.x_train, x, x1_prime=self.x_prime_train, x2_prime=x, dx_max=self.n_dim, dy_max=self.n_dim)
+                mat = create_mat(self.kernel, x, x, x1_prime=x, x2_prime=x, dx_max=self.n_dim, dy_max=self.n_dim)
                 v = cho_solve((self.L, True), k_mat)
                 predictive_covariance = mat - k_mat.T.dot(v)
                 predictive_covariance[predictive_covariance[np.diag_indices(len(predictive_covariance))] < 0.0] = 0.0
