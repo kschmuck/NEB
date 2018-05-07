@@ -9,6 +9,7 @@ import warnings
 import scipy.optimize as sp_opt
 import scipy.spatial.distance as spdist
 
+# Todo IRWLS or Support vector machine algorithm
 
 class ML:
     """ Parent class for the surface fitting
@@ -121,68 +122,7 @@ class ML:
         x = x.reshape(-1,2)
         return self.predict(x), self.predict_derivative(x).reshape(-1), None
 
-    def _create_mat(self):
-        """
-        creates the matrix to the lagrangian
-        See
-        :return: matrix elements k, g, k_prime, j
-        """
-        # [[k,        g]
-        #  [k_prime,  j]]
 
-        if self.n_samples != 0:
-            k = self._create_mat_part(self.x_train, self.x_train, dxy=0)
-        else:
-            k = np.zeros([self.n_samples, self.n_samples])
-
-        if self.n_samples_prime != 0:
-            j = self._create_mat_part(self.x_prime_train, self.x_prime_train, dxy=2)
-        else:
-            j = np.zeros([self.n_samples_prime*self.n_dim, self.n_samples_prime*self.n_dim])
-
-        if self.n_samples != 0 and self.n_samples_prime != 0:
-            g, k_prime = self._create_mat_part(self.x_train, self.x_prime_train, dxy=1)
-        else:
-            g = np.zeros([self.n_samples, self.n_samples_prime*self.n_dim])
-            k_prime = g.T
-
-        return k, g, k_prime, j
-
-    def _create_mat_part(self, x, y, dxy=0, dp=0):
-        """
-        creates parts of the matrix
-        caution if dxy = 0 x, y are both function pattern
-                if dxy = 1 x is function pattern and y is the prime pattern
-                if dxy = 2 x, y are both the prime pattern
-        :param x: first pattern
-        :param y: second pattern
-        :param dxy: determines which part is created. default: dxy=0 the simple kernel is created;
-                                                               dxy=1 creates the first order derivative matrix
-                                                               dxy=2 creates the second order derivative matrix
-        :return: in case of dxy = 1 two matrix's are returned else just one
-        """
-        if dxy == 0:
-            return self.kernel(x, y, dp=dp)
-
-        elif dxy == 1:
-            g = np.zeros([len(x), len(y)*len(y[0])])
-            # k_prime = np.zeros([len(y)*len(y[0]), len(x)])
-            for ii in range(0, len(y[0])):
-                ind1 = [ii * len(y), (ii + 1) * len(y)]
-                ind2 = [0, len(x)]
-                g[ind2[0]:ind2[1], ind1[0]:ind1[1]] = self.kernel(x, y, dx=ii+1, dy=0, dp=dp)
-                # k_prime[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(y, x, dy=0, dx=ii+1)
-
-            return g, g.T
-
-        else:
-            j = np.zeros([len(x)*len(x[0]), len(y)*len(y[0])])
-            for ii in range(0, len(x[0])):
-                for jj in range(0, len(y[0])):
-                    ind1 = [ii * len(x), (ii + 1) * len(x)]
-                    ind2 = [jj * len(y), (jj + 1) * len(y)]
-                    j[ind1[0]:ind1[1], ind2[0]:ind2[1]] = self.kernel(x, y, dx=ii + 1, dy=jj + 1, dp=dp)
-            return j
 
     def _invert_mat(self, mat):
         # mat = [[A B]      output = [[W X]
@@ -202,32 +142,6 @@ class ML:
         inv_mat[self.n_samples:, self.n_samples:] = d_inv + d_inv.dot(c.dot(w))
 
         return inv_mat
-
-    def create_mat(self, x1, x2, x1_prime=None, x2_prime=None, dp=0):
-        n, d = x1.shape
-        m, f = x2.shape
-        if f != d:
-            raise ValueError('input differs in dimensions')
-
-        if x1_prime is None and x2_prime is None:
-            return self.kernel(x1, x2, dp)
-        else:
-            k_mat = np.zeros([n + n * d, m + m * f])
-            k_mat[:n, :m] = self.kernel(x1, x2, dp=dp)
-            for ii in range(d):
-                for jj in range(f):
-                    k_mat[:n, m + m * jj:m * (jj + 2)] = self.kernel(x1_prime, x2, dx=jj + 1, dy=0, dp=dp)
-                    k_mat[n + n * jj:n * (jj + 2), m + m * ii:m + m * (ii + 1)] = self.kernel(x1_prime, x2_prime,
-                                                                                              dx=jj + 1, dy=ii + 1,
-                                                                                              dp=dp)
-
-            # true if kernel is RBF
-            if n == m:
-                k_mat[n:, :m] = k_mat[:n, m:].T
-            else:
-                k_mat[n:, :m] = -k_mat[:n, m:]
-
-            return k_mat
 
 
 class IRWLS(ML):
@@ -591,17 +505,20 @@ class RLS(ML):
         :return:
         """
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+        if self.n_samples_prime == 0:
+            kernel_mat = create_mat(self.kernel, x_train, x_train, x_prime_train, x_prime_train, eval_gradient=False)
+            kernel_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples) / C1
+        else:
+            kernel_mat = create_mat(self.kernel, x_train, x_train, x_prime_train, x_prime_train, dx_max=self.n_dim,
+                                                                                                    dy_max=self.n_dim)
+            kernel_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples)/C1
+            kernel_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime*self.n_dim) / C2
 
-        k, g, k_prime, j = self._create_mat()
-        k = k + np.eye(self.n_samples)/C1
-        j = j + np.eye(self.n_samples_prime*self.n_dim)/C2
         if not minimze_b:
             mat_size = self.n_samples + self.n_samples_prime * self.n_dim + 1
             mat = np.zeros([mat_size, mat_size])
-            mat[:self.n_samples, :self.n_samples] = k #+ np.eye(self.n_samples)/C1
-            mat[:self.n_samples, self.n_samples:-1] = g
-            mat[self.n_samples:-1, :self.n_samples] = k_prime
-            mat[self.n_samples:-1, self.n_samples:-1] = j #+ np.eye(self.n_samples_prime*self.n_dim)/C2
+            mat[:-1, :-1] = kernel_mat
+
 
             if self.n_samples == 0:
                 mat[-1, -1] = 1
@@ -614,28 +531,10 @@ class RLS(ML):
 
         else:
             vec = np.concatenate([self.y_train, self.y_prime_train.flatten()])
-            mat_size = self.n_samples + self.n_samples_prime * self.n_dim
-            mat = np.zeros([mat_size, mat_size])
 
-            if self.n_dim == 1:
-                # inverting matrix with the scheme for one dimension of the paper ..
-                k = np.linalg.inv(k + 1)
+            mat = kernel_mat
+            mat = np.linalg.inv(mat)
 
-                v = np.linalg.inv(j - k_prime.dot(k.dot(g)))
-                u = -k.dot(g.dot(v))
-                w = -v.dot(k_prime.dot(k))
-                t = k - k.dot(g.dot(w))
-
-                mat[:self.n_samples, :self.n_samples] = t
-                mat[self.n_samples:, :self.n_samples] = w
-                mat[:self.n_samples, self.n_samples:] = u
-                mat[self.n_samples:, self.n_samples:] = v
-            else:
-                mat[:self.n_samples, :self.n_samples] = k
-                mat[:self.n_samples, self.n_samples:] = g
-                mat[self.n_samples:, :self.n_samples] = k_prime
-                mat[self.n_samples:, self.n_samples:] = j
-                mat = np.linalg.inv(mat)
         weight = mat.dot(vec)
         self._alpha = weight[0:self.n_samples].reshape(-1).T
         self.y_debug = vec
@@ -674,16 +573,26 @@ class GPR(ML):
         ML.__init__(self, kernel)
 
     def get_hyper_parameter(self):
-        return np.array(self.kernel.get_hyper_parameters()).reshape(-1)
+        if isinstance(self.kernel, Kernels.OLDRBFGrad):
+            return np.log(self.kernel.hyper_parameter)
+        else:
+            return self.kernel.theta
 
     def set_hyper_parameter(self, hyper_parameter):
-        self.kernel.set_hyper_parameters(hyper_parameter)
+        if isinstance(self.kernel, Kernels.OLDRBFGrad):
+            self.kernel.hyper_parameter = np.exp(hyper_parameter)
+        else:
+            self.kernel.theta = hyper_parameter
 
     def get_bounds(self):
-        bounds = []
-        for element in self.kernel.bounds:
-            bounds.append(element)
-        return np.log(np.array(bounds))
+        if isinstance(self.kernel, Kernels.OLDRBFGrad):
+            bounds = []
+            for element in self.kernel.bounds:
+                bounds.append(element)
+            return np.log(np.array(bounds))
+        else:
+            return self.kernel.bounds
+        #
 
     def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10, restarts=0,
             fit_method='LBFGS_B'):
@@ -691,13 +600,12 @@ class GPR(ML):
         self.noise = noise
         self.y_mean = np.mean(y_train)
         if self.x_prime_train is None:
-
             self._y_vec = np.concatenate([self.y_train - self.y_mean])
-            self.kernel.hyper_parameter[-1] = self.y_mean
         else:
             self.y_prime_mean = np.mean(y_prime_train, axis=0)
             self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten()])
 
+        self.optimize(self.get_hyper_parameter())
         initial_hyper_parameters = self.get_hyper_parameter()
         opt_hyper_parameter = []
         value = []
@@ -714,17 +622,20 @@ class GPR(ML):
             opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
             opt_hyper_parameter.append(opt[0])
             value.append(opt[1])
+
         min_ind = np.argmin(value)
         self.set_hyper_parameter(opt_hyper_parameter[min_ind])
 
+        print(self.get_hyper_parameter())
+
         if self.n_samples_prime == 0:
-            K = self.kernel(self.x_train, self.x_train)
+            K = create_mat(self.kernel, self.x_train, self.x_train)
             K += np.eye(K.shape[0]) * self.noise
             self.L, alpha = self._cholesky(K)
             self._alpha = alpha
-
         else:
-            k_mat = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train, x2_prime=self.x_prime_train)
+            k_mat = create_mat(self.kernel, self.x_train, self.x_train, x1_prime=self.x_prime_train,
+                               x2_prime=self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim)
             k_mat += self.noise * np.eye(k_mat.shape[0])
 
             self.L, alpha = self._cholesky(k_mat)
@@ -736,6 +647,7 @@ class GPR(ML):
 
     def optimize(self, hyper_parameter):
         self.set_hyper_parameter(hyper_parameter)
+        # print(hyper_parameter)
         log_marginal_likelihood, d_log_marginal_likelihood = self.log_marginal_likelihood(derivative=self._opt_flag)
 
         return -log_marginal_likelihood, -d_log_marginal_likelihood
@@ -743,9 +655,10 @@ class GPR(ML):
     def log_marginal_likelihood(self, derivative=False):
         # gives vale of log marginal likelihood with the gradient
         if self.n_samples_prime == 0:
-            k_mat = self.kernel(self.x_train, self.x_train)
+            k_mat, k_grad = create_mat(self.kernel, self.x_train, self.x_train, eval_gradient=True)
         else:
-            k_mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
+            k_mat, k_grad = create_mat(self.kernel, self.x_train, self.x_train, self.x_prime_train,
+                                        self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim, eval_gradient=True)
         k_mat += np.eye(k_mat.shape[0]) * self.noise
         L, alpha = self._cholesky(k_mat)
         log_mag_likelihood = -0.5*self._y_vec.dot(alpha) - np.log(np.diag(L)).sum() - L.shape[0]/2.*np.log(2*np.pi)
@@ -754,22 +667,11 @@ class GPR(ML):
             return log_mag_likelihood
 
         temp = (np.multiply.outer(alpha, alpha) - cho_solve((L, True), np.eye(L.shape[0])))[:, :, np.newaxis]
-        d_log_mag_likelihood = []
 
-        if self.n_samples_prime == 0:
-            for pp in range(len(self.get_hyper_parameter())):
-                k_grad = self.kernel(self.x_train, self.x_train, dx=0, dy=0, dp=pp+1)
+        d_log_mag_likelihood = 0.5 * np.einsum("ijl,ijk->kl", temp, k_grad)
 
-                d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
-        else:
+        d_log_mag_likelihood = d_log_mag_likelihood.sum(-1)
 
-            for pp in range(1, len(self.kernel.hyper_parameter) + 1):
-                k_grad = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train,
-                                         x2_prime=self.x_prime_train, dp=pp)
-
-                d_log_mag_likelihood.append(0.5 * np.einsum("ijl,ijk->kl", temp, k_grad[:, :, np.newaxis]).flatten())
-
-        d_log_mag_likelihood = np.array([d_log_mag_likelihood]).flatten()
         return log_mag_likelihood, d_log_mag_likelihood
 
     def _cholesky(self, kernel):
@@ -789,8 +691,7 @@ class GPR(ML):
             opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameter,
                                                                     bounds=self.get_bounds())
             if opt_dict["warnflag"] != 0:
-                warnings.warn("fmin_l_bfgs_b terminated abnormally with the "
-                              " state: %s" % opt_dict)
+                warnings.warn("fmin_l_bfgs_b terminated abnormally with the state: %s" % opt_dict)
         elif method == 'BFGS':
             # TODO return function value
             self._opt_flag = False
@@ -852,3 +753,47 @@ def check_matrix(mat):
     print('eigenvalues = ' + str(eig_val))
     print('dimension = ' + str(mat.shape))
     print('----------------')
+
+
+def create_mat(kernel, x1, x2, x1_prime=None, x2_prime=None, dx_max=0, dy_max=0, eval_gradient=False):
+
+    n, d = x1.shape
+    if x1_prime is None:
+        return kernel(x1, x2, dx=0, dy=0, eval_gradient=eval_gradient)
+    else:
+        m, f = x2.shape
+        if not eval_gradient:
+            kernel_mat = np.zeros([n * (1 + d), m * (1 + f)])
+            for ii in range(dx_max + 1):
+                for jj in range(dy_max + 1):
+                    if ii == 0 and jj == 0:
+                        kernel_mat[n * ii:n * (ii + 1), m * jj:m * (jj + 1)] = kernel(x1, x2, dx=ii, dy=jj,
+                                                                                      eval_gradient=eval_gradient)
+                    elif (ii == 0 and jj != 0):
+                        kernel_mat[n * ii:n * (ii + 1), m * jj:m * (jj + 1)] = kernel(x1, x2_prime, dx=ii, dy=jj,
+                                                                                      eval_gradient=eval_gradient)
+                    elif (jj == 0 and ii != 0):
+                        kernel_mat[n * ii:n * (ii + 1), m * jj:m * (jj + 1)] = kernel(x1_prime, x2, dx=ii, dy=jj,
+                                                                                      eval_gradient=eval_gradient)
+                    else:
+                        kernel_mat[n * ii:n * (ii + 1), m * jj:m * (jj + 1)] = kernel(x1_prime, x2_prime, dx=ii, dy=jj,
+                                                                                      eval_gradient=eval_gradient)
+            return kernel_mat
+        else:
+            num_theta = len(kernel.theta)
+            kernel_derivative = np.zeros([n * (1 + d), m * (1 + f), num_theta])
+            kernel_mat = np.zeros([n * (1 + d), m * (1 + f)])
+            for ii in range(dx_max + 1):
+                for jj in range(dy_max + 1):
+                    if ii == 0 and jj == 0:
+                       k_mat, deriv_mat = kernel(x1, x2, dx=ii, dy=jj, eval_gradient=eval_gradient)
+                    elif (ii == 0 and jj != 0):
+                        k_mat, deriv_mat = kernel(x1, x2_prime, dx=ii, dy=jj, eval_gradient=eval_gradient)
+                    elif (jj == 0 and ii != 0):
+                        k_mat, deriv_mat = kernel(x1_prime, x2, dx=ii, dy=jj, eval_gradient=eval_gradient)
+                    else:
+                        k_mat, deriv_mat = kernel(x1_prime, x2_prime, dx=ii, dy=jj, eval_gradient=eval_gradient)
+
+                    kernel_mat[n * ii:n * (ii + 1), m * jj:m * (jj + 1)] = k_mat
+                    kernel_derivative[n * ii:n * (ii + 1), m * jj:m * (jj + 1), :] = deriv_mat
+            return kernel_mat, kernel_derivative
