@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 import scipy as sp
 from scipy.linalg import cho_solve, cholesky
 import copy as cp
-
-
+import warnings
 import scipy.optimize as sp_opt
 import scipy.spatial.distance as spdist
 
@@ -203,31 +202,6 @@ class ML:
         inv_mat[self.n_samples:, self.n_samples:] = d_inv + d_inv.dot(c.dot(w))
 
         return inv_mat
-
-    def _mat(self, x=None, y=None, dp=0):
-        """ creates the kernel matrix
-            x = None is default value for creation of the training matrix
-            if  x is not None -> the matrix is created with respect to x and the training points (x_train, x_prime_train)
-        """
-        if dp==0:
-            k, g, k_prime, j = self._create_mat()
-            mat = np.zeros([self.n_samples + self.n_dim * self.n_samples_prime,
-                            self.n_samples + self.n_dim * self.n_samples_prime])
-            mat[:self.n_samples, :self.n_samples] = k
-            mat[:self.n_samples, self.n_samples:] = g
-            mat[self.n_samples:, :self.n_samples] = k_prime
-            mat[self.n_samples:, self.n_samples:] = j
-        else:
-            if self.n_samples_prime !=0:
-                mat = np.zeros([self.n_samples + self.n_dim * self.n_samples_prime,
-                                self.n_samples + self.n_dim * self.n_samples_prime])
-                mat[:self.n_samples, :self.n_samples] = self._create_mat_part(self.x_train, self.x_train, dp=dp)
-                mat[:self.n_samples, self.n_samples:] = self._create_mat_part(self.x_train, self.x_prime_train, dp=dp)
-                mat[self.n_samples:, :self.n_samples] = mat[:self.n_samples, self.n_samples:].T
-                mat[self.n_samples:, self.n_samples:] = self._create_mat_part(self.x_prime_train, self.x_prime_train, dp=dp)
-            else:
-                mat = self._create_mat_part(self.x_train, self.x_train, dp=dp)
-        return mat
 
     def create_mat(self, x1, x2, x1_prime=None, x2_prime=None, dp=0):
         n, d = x1.shape
@@ -604,7 +578,7 @@ class RLS(ML):
     See:
     """
 
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, minimze_b=True, C1=10**10., C2=10**10.):
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, minimze_b=False, C1=1., C2=1.):
         """
         Fitting a new model to a given training pattern
         :param x_train: function input pattern shape = [N_samples, N_features]
@@ -658,9 +632,9 @@ class RLS(ML):
                 mat[self.n_samples:, self.n_samples:] = v
             else:
                 mat[:self.n_samples, :self.n_samples] = k
-                mat[:self.n_samples, self.n_samples:-1] = g
-                mat[self.n_samples:-1, :self.n_samples] = k_prime
-                mat[self.n_samples:-1, self.n_samples:-1] = j
+                mat[:self.n_samples, self.n_samples:] = g
+                mat[self.n_samples:, :self.n_samples] = k_prime
+                mat[self.n_samples:, self.n_samples:] = j
                 mat = np.linalg.inv(mat)
         weight = mat.dot(vec)
         self._alpha = weight[0:self.n_samples].reshape(-1).T
@@ -695,6 +669,7 @@ class GPR(ML):
         # this is done in the log marginal likelihood
 
         self.noise = None
+        self._opt_flag = True
 
         ML.__init__(self, kernel)
 
@@ -710,7 +685,8 @@ class GPR(ML):
             bounds.append(element)
         return np.log(np.array(bounds))
 
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10):
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10, restarts=0,
+            fit_method='LBFGS_B'):
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
         self.noise = noise
         self.y_mean = np.mean(y_train)
@@ -723,10 +699,23 @@ class GPR(ML):
             self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten()])
 
         initial_hyper_parameters = self.get_hyper_parameter()
-        opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameters,
-                                                                    bounds=self.get_bounds())
+        opt_hyper_parameter = []
+        value = []
+        opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
+        opt_hyper_parameter.append(opt[0])
+        value.append(opt[1])
 
-        self.set_hyper_parameter(opt_hyper_parameter)
+        if restarts != 0:
+            initial_hyper_parameters = []
+            bounds = self.kernel.bounds
+            for element in bounds:
+                initial_hyper_parameters.append(np.random.uniform(element[0], element[1], 1))
+            initial_hyper_parameters = np.array(initial_hyper_parameters)
+            opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
+            opt_hyper_parameter.append(opt[0])
+            value.append(opt[1])
+        min_ind = np.argmin(value)
+        self.set_hyper_parameter(opt_hyper_parameter[min_ind])
 
         if self.n_samples_prime == 0:
             K = self.kernel(self.x_train, self.x_train)
@@ -736,7 +725,7 @@ class GPR(ML):
 
         else:
             k_mat = self.create_mat(self.x_train, self.x_train, x1_prime=self.x_prime_train, x2_prime=self.x_prime_train)
-            k_mat += self.noise*np.eye(k_mat.shape[0])
+            k_mat += self.noise * np.eye(k_mat.shape[0])
 
             self.L, alpha = self._cholesky(k_mat)
             self._alpha = alpha[:self.n_samples]
@@ -747,9 +736,8 @@ class GPR(ML):
 
     def optimize(self, hyper_parameter):
         self.set_hyper_parameter(hyper_parameter)
-        # print(hyper_parameter)
-        log_marginal_likelihood, d_log_marginal_likelihood = self.log_marginal_likelihood(derivative=True)
-        # print(-log_marginal_likelihood)
+        log_marginal_likelihood, d_log_marginal_likelihood = self.log_marginal_likelihood(derivative=self._opt_flag)
+
         return -log_marginal_likelihood, -d_log_marginal_likelihood
 
     def log_marginal_likelihood(self, derivative=False):
@@ -795,6 +783,22 @@ class GPR(ML):
         alpha = cho_solve((L, True), self._y_vec)
         return L, alpha
 
+    def _opt_routine(self, initial_hyper_parameter, method='LBFGS_B'):
+        if method == 'LBFGS_B':
+            self._opt_flag = True
+            opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameter,
+                                                                    bounds=self.get_bounds())
+            if opt_dict["warnflag"] != 0:
+                warnings.warn("fmin_l_bfgs_b terminated abnormally with the "
+                              " state: %s" % opt_dict)
+        elif method == 'BFGS':
+            # TODO return function value
+            self._opt_flag = False
+            opt_hyper_parameter = sp_opt.fmin_bfgs(self.optimize, initial_hyper_parameter)
+            value = 0
+
+        return opt_hyper_parameter, value
+
     def predict(self, x, error_estimate=False):
         # print(self.get_hyper_parameter())
         if self.n_samples_prime == 0:
@@ -824,6 +828,19 @@ class GPR(ML):
                 return predictive_mean, predictive_variance
             else:
                 return predictive_mean
+
+    def predict_derivative(self, x, error_estimate=False):
+        predictive_derivative = np.zeros((len(x), self.n_dim))
+        if self.n_samples_prime == 0:
+            for ii in range(self.n_dim):
+                predictive_derivative[:, ii] = self._alpha.dot(self.kernel(self.x_train, x, dx=ii + 1))
+            return predictive_derivative
+        else:
+            for ii in range(self.n_dim):
+                predictive_derivative[:, ii] = self._alpha.dot(self.kernel(self.x_train, x, dx=ii + 1)) \
+                                     + sum([self._beta[:, jj].dot(self.kernel(self.x_prime_train, x, dx=ii + 1, dy=jj + 1))
+                                            for jj in range(self.n_dim)])
+            return predictive_derivative
 
 
 def check_matrix(mat):
