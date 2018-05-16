@@ -320,7 +320,7 @@ class Optimizer:
                 jj = ii
                 force = f
         print(str(force) + ' of image ' + str(jj+1))
-        return jj+1
+        return jj
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
                 freezing=0, tangent_method='simple_improved'):
