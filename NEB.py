@@ -8,7 +8,7 @@ def create_images(product, reactant, number_of_images):
 # cartesian coordinates!!
 # check if product size == as reactant size
     if not (len(product) == len(reactant)):
-        print('size of product is not equal to size of reactant')
+        raise ValueError('size of product is not equal to size of reactant')
     images = []
     img_positions = np.array([np.linspace(p, r, number_of_images + 2) for p, r in zip(product, reactant)])
     for element in img_positions.T:
@@ -59,7 +59,7 @@ def rotation_geometry(positions):
     return positions, rotation_matrix_a
 
 
-def get_tangent(img_0, img_1, img_2, method='improved'):
+def get_tangent(img_0, img_1, img_2, method='simple_improved'):
     # img_i is one image
     # img_0 = image before
     # img_1 = current image, at this image the tangent is set.
@@ -110,6 +110,8 @@ def get_tangent(img_0, img_1, img_2, method='improved'):
                 tangent = t_p * maximum + t_m * minimum
             else:
                 tangent = t_p * minimum + t_m * maximum
+    else:
+        raise NotImplementedError('Method is not implemented')
     tangent = tangent / np.linalg.norm(tangent)
     return tangent
 
@@ -318,9 +320,10 @@ class Optimizer:
                 jj = ii
                 force = f
         print(str(force) + ' of image ' + str(jj+1))
+        return jj+1
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
-                freezing=0, tangent_method='improved'):
+                freezing=0, tangent_method='simple_improved'):
         self.fmax = force_max
         images.set_optimizer(optimizer)
 
