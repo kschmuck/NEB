@@ -1138,14 +1138,14 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
         if not self.anisotropic or length_scale.shape[0] == 1:
             if dx != 0 or dy != 0:
                 if dx == dy:
-                    K = K * (1 - np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])**2 / length_scale**2) / length_scale**2
-                elif dx == 0:
-                    K = K * np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])/length_scale**2
-                elif dy == 0:
-                    K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])/length_scale**2
+                    K = K * (1 - np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])**2 / length_scale**2) / length_scale**2 # J_ii
+                elif dx == 0: # and dy != 0:
+                    K = K * np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])/length_scale**2 # G
+                elif dy == 0: # and dx != 0:
+                    K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])/length_scale**2 # K_prime
                 else:
                     K = -K * np.subtract.outer(X[:, dx-1].T, Y[:, dx-1])*np.subtract.outer(X[:, dy-1].T, Y[:, dy-1])\
-                                 /length_scale**4
+                                 /length_scale**4 # J_ij
         else:
             if dx != 0 or dy != 0:
                 if dx == dy:
@@ -1168,11 +1168,14 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
                     K_gradient = (K * dists)[:, :, np.newaxis]
                 elif (dx != 0 and dy == 0) or (dx == 0 and dy != 0):
                     K_gradient = (K * (dists - 2))[:, :, np.newaxis]
+                    # K_gradient = (K * (dists/length_scale**2 - 2/length_scale**2))[:, :, np.newaxis]
                 else:
                     if dx == dy:
-                        K_gradient = (np.exp(-.5 * dists)/length_scale**2*(dists - 2 - dists * (dists - 4)))[:, :, np.newaxis]
+                        K_gradient = (np.exp(-.5 * dists) / length_scale ** 2 * (5*dists - 2 - dists **2))[:, :, np.newaxis]
+                        # K_gradient = (np.exp(-0.5*dists)*(dists**2/length_scale**3-1./length_scale**5-4*(dists-1/length_scale**3)-2/length_scale**3))[:, :, np.newaxis]
                     else:
-                        K_gradient = (np.exp(-.5 * dists) * dists/length_scale**2 * (4 - dists))[:, :, np.newaxis]
+                        K_gradient = (-np.exp(-.5 * dists) * dists/length_scale**2 * (4 - dists))[:, :, np.newaxis]
+                        # K_gradient = (np.exp(-.5 * dists) * dists**2 / length_scale ** 3 * (dists**2 - 4))[:, :, np.newaxis]
                 return K, K_gradient
             elif self.anisotropic:
 
@@ -1181,18 +1184,22 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
                 if dx == 0 and dy == 0:
                     K_gradient = grad * K[..., np.newaxis]
 
-                elif (dx != 0 and dy == 0) or (dy != 0 and dx == 0):
+                elif (dx != 0 and dy == 0):
                     K_gradient = grad * K[..., np.newaxis]
-                    K_gradient[:, :, dx-1] = K_gradient[:, :, dx-1] - 2*K
+                    K_gradient[:, :, dx - 1] = K_gradient[:, :, dx - 1] - 2 * K
+                elif (dy != 0 and dx == 0):
+                    K_gradient = grad * K[..., np.newaxis]
+                    K_gradient[:, :, dy-1] = K_gradient[:, :, dy-1] - 2*K
                 else:
                     if dx == dy:
                         K_gradient = grad * K[..., np.newaxis]
-                        K_gradient[:, :, dx-1] = K_gradient[:, :, dx-1] - K + np.exp(-.5 * dists)\
-                                                                              / length_scale[dx-1]**2 * grad[:, :, dx-1]
+                        K_gradient[:, :, dx - 1] = K_gradient[:, :, dx - 1] - np.exp(-0.5 * dists) * (2 /
+                                            length_scale[dx-1] ** 2 - 4 * grad[:, :, dx - 1] / length_scale[dx-1] ** 2)
+
                     else:
                         K_gradient = grad * K[..., np.newaxis]
-                        K_gradient[:, :, dx - 1] = K_gradient[:, :, dx - 1] - K
-                        K_gradient[:, :, dy - 1] = K_gradient[:, :, dy - 1] - K
+                        K_gradient[:, :, dx - 1] = K_gradient[:, :, dx - 1] - 2*K
+                        K_gradient[:, :, dy - 1] = K_gradient[:, :, dy - 1] - 2*K
                 return K, K_gradient
         else:
             return K
@@ -1205,6 +1212,7 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
         else:  # isotropic
             return "{0}(length_scale={1:.3g})".format(
                 self.__class__.__name__, np.ravel(self.length_scale)[0])
+
 
 
 
@@ -1227,9 +1235,9 @@ class OLDRBF:
                 return -1.0 /self.gamma * exp_mat * (
                     1.0 / self.gamma * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1]) ** 2 - 1)
         elif dx == 0:
-            return -1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
+            return 1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
         elif dy == 0:
-            return 1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1])
+            return -1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1])
         else:
             return -2.0 / self.gamma ** 2 * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1]) \
                    * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
