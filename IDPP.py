@@ -67,7 +67,7 @@ class IDPP:
                 energy = energy + 1./distance**(4./2.) * (d_ij_k[ii, jj]-distance)**2
         return energy
 
-    def energy_gradient_idpp_fucntion(self, position, *args):
+    def energy_gradient_idpp_function(self, position, *args):
         d_ij_k = args[0]
 
         gradient = self.calc_forces_numerical(position, d_ij_k)
