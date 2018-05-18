@@ -1166,15 +1166,19 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
             elif not self.anisotropic or length_scale.shape[0] == 1:
                 if dx == 0 and dy == 0:
                     K_gradient = (K * dists)[:, :, np.newaxis]
-                elif (dx != 0 and dy == 0) or (dx == 0 and dy != 0):
+                elif dx != 0 and dy == 0:
+                    K_gradient = (K * (dists - 2))[:, :, np.newaxis]
+                elif dy != 0 and dx == 0:
                     K_gradient = (K * (dists - 2))[:, :, np.newaxis]
                     # K_gradient = (K * (dists/length_scale**2 - 2/length_scale**2))[:, :, np.newaxis]
                 else:
                     if dx == dy:
-                        K_gradient = (np.exp(-.5 * dists) / length_scale ** 2 * (5*dists - 2 - dists **2))[:, :, np.newaxis]
+                        K_gradient = (K * (dists - 4) + 2 * np.exp(-0.5*dists)/length_scale**2)[:, :, np.newaxis]
+                        # K_gradient = (np.exp(-.5 * dists) / length_scale ** 2 * (5*dists - 2 - dists **2))[:, :, np.newaxis]
                         # K_gradient = (np.exp(-0.5*dists)*(dists**2/length_scale**3-1./length_scale**5-4*(dists-1/length_scale**3)-2/length_scale**3))[:, :, np.newaxis]
                     else:
-                        K_gradient = (-np.exp(-.5 * dists) * dists/length_scale**2 * (4 - dists))[:, :, np.newaxis]
+                        K_gradient = (K * (dists - 4))[:, :, np.newaxis]
+                        # K_gradient = (-np.exp(-.5 * dists) * dists/length_scale**2 * (4 - dists))[:, :, np.newaxis]
                         # K_gradient = (np.exp(-.5 * dists) * dists**2 / length_scale ** 3 * (dists**2 - 4))[:, :, np.newaxis]
                 return K, K_gradient
             elif self.anisotropic:
@@ -1213,31 +1217,3 @@ class RBF(StationaryKernelMixin, NormalizedKernelMixin, Kernel):
             return "{0}(length_scale={1:.3g})".format(
                 self.__class__.__name__, np.ravel(self.length_scale)[0])
 
-
-
-
-class OLDRBF:
-    def __init__(self, gamma=1.):
-        self.gamma = gamma
-
-    def __call__(self, x, y, dx=0, dy=0, eval_gradient=0):
-        # dp derivative of the parameters is used for the GPR
-        # in case of GPR the gamma have to be redefined outside to gamma = 1/(2*exp(length scale)) because length scale
-        # is the hyper parameter of interest
-        # mat = _np.tile(_np.sum(x ** 2, axis=1), (len(y), 1)).T + _np.tile(_np.sum(y ** 2, axis=1),
-        #                                                                   (len(x), 1)) - 2 * x.dot(y.T)
-        mat = _spdist.cdist(x/self.gamma, y/self.gamma, 'sqeuclidean')
-        exp_mat = np.exp(-0.5* mat)
-        if dx == dy:
-            if dx == 0:
-                return exp_mat
-            else:
-                return -1.0 /self.gamma * exp_mat * (
-                    1.0 / self.gamma * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1]) ** 2 - 1)
-        elif dx == 0:
-            return 1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
-        elif dy == 0:
-            return -1.0 / self.gamma * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1])
-        else:
-            return -2.0 / self.gamma ** 2 * exp_mat * np.subtract.outer(x[:, dx - 1].T, y[:, dx - 1]) \
-                   * np.subtract.outer(x[:, dy - 1].T, y[:, dy - 1])
