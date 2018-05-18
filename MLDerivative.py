@@ -612,15 +612,13 @@ class GPR(ML):
         if self.x_prime_train is None:
             self._y_vec = np.concatenate([self.y_train - self.y_mean])
         else:
-            self.y_prime_mean = np.mean(y_prime_train, axis=0)
+            # self.y_prime_mean = np.mean(y_prime_train, axis=0)
             self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten('F')])
-
-            # self._y_vec = np.concatenate([self.y_train, self.y_prime_train.flatten()])
 
         if restarts > 0:
             optimize_hyperparameter = True
+
         if optimize_hyperparameter:
-            # self.optimize(self.get_hyper_parameter())
             initial_hyper_parameters = self.get_hyper_parameter()
             opt_hyper_parameter = []
             value = []
@@ -712,6 +710,7 @@ class GPR(ML):
                 warnings.warn("fmin_l_bfgs_b terminated abnormally with the state: %s" % opt_dict)
         elif method == 'BFGS':
             # TODO return function value
+            # TODO implementation
             self._opt_flag = False
             opt_hyper_parameter = sp_opt.fmin_bfgs(self.optimize, initial_hyper_parameter)
             value = 0

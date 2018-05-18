@@ -152,7 +152,7 @@ class ImageSet(list):
     def get_image_position_list(self):
         positions = []
         for element in self:
-            positions.append(np.reshape(element.position, [len(self.atom_list), 3]))
+            positions.append(np.reshape(element.position[-1], [len(self.atom_list), 3]))
         return positions
 
     def get_image_energy_list(self):
