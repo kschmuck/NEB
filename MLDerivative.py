@@ -9,14 +9,17 @@ import warnings
 import scipy.optimize as sp_opt
 import scipy.spatial.distance as spdist
 
-# Todo IRWLS or Support vector machine algorithm
+
+np.set_printoptions(linewidth=320)
+debug_flag = True
+
 
 class ML:
     """ Parent class for the surface fitting
     :param kernel is the mapping of the points to the feature space, kernel returns the pair distances of given points
                     and derivatives
     """
-    def __init__(self, kernel):
+    def __init__(self, kernel, reg_value, reg_derivative):
         self.x_train = None
         self.x_prime_train = None
         self.y_train = None
@@ -25,10 +28,6 @@ class ML:
         self.n_samples_prime = None
         self.n_dim = None
 
-        self.y_debug = None
-
-        self._is_fitted = False
-
         self.kernel = kernel
 
         self._intercept = None
@@ -36,6 +35,11 @@ class ML:
         self._support_index_alpha = None
         self._beta = None
         self._support_index_beta = None
+
+        self._reg_value = reg_value
+        self._reg_derivative = reg_derivative
+
+        self._is_fitted = False
 
     def _fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None):
         """
@@ -57,6 +61,7 @@ class ML:
             self.y_prime_train = np.array([])
         else:
             self.n_samples_prime, self.n_dim = y_prime_train.shape
+            self.y_prime_train = self.y_prime_train.flatten('F')
 
     def predict(self, x):
         """
@@ -122,366 +127,259 @@ class ML:
         x = x.reshape(-1, self.n_dim)
         return self.predict(x), self.predict_derivative(x).reshape(-1), None
 
-    def _invert_mat(self, mat):
-        # mat = [[A B]      output = [[W X]
-        #        [C D]]               [Y Z]]
-        inv_mat = np.zeros(mat.shape)
-        a = mat[:self.n_samples, :self.n_samples]
-        b = mat[:self.n_samples, self.n_samples:]
-        c = mat[self.n_samples:, :self.n_samples]
-        d_inv = np.linalg.inv(mat[self.n_samples:, self.n_samples:])
+    # def _invert_mat(self, mat, cholesky_inversion=False):
+    #     if cholesky_inversion:
+    #         try:
+    #             L = cholesky(mat)
+    #         except np.linalg.LinAlgError:
+    #             check_matrix(mat)
+    #             # implement automatic increasing noise
+    #             raise Exception('failed')
+    #         return L
+    #
+    #     else:
+    #         # mat = [[A B]      output = [[W X]
+    #         #        [C D]]               [Y Z]]
+    #         inv_mat = np.zeros(mat.shape)
+    #         a = mat[:self.n_samples, :self.n_samples]
+    #         b = mat[:self.n_samples, self.n_samples:]
+    #         c = mat[self.n_samples:, :self.n_samples]
+    #         d_inv = np.linalg.inv(mat[self.n_samples:, self.n_samples:])
+    #
+    #         w = np.linalg.inv(a - b.dot(d_inv.dot(c)))
+    #         x = -w.dot(b.dot(d_inv))
+    #
+    #         inv_mat[:self.n_samples, :self.n_samples] = w
+    #         inv_mat[:self.n_samples, self.n_samples:] = x
+    #         inv_mat[self.n_samples:, :self.n_samples] = -d_inv.dot(c.dot(w))
+    #         inv_mat[self.n_samples:, self.n_samples:] = d_inv + d_inv.dot(c.dot(w))
+    #
+    #     return inv_mat
 
-        w = np.linalg.inv(a - b.dot(d_inv.dot(c)))
-        x = -w.dot(b.dot(d_inv))
 
-        inv_mat[:self.n_samples, :self.n_samples] = w
-        inv_mat[:self.n_samples, self.n_samples:] = x
-        inv_mat[self.n_samples:, :self.n_samples] = -d_inv.dot(c.dot(w))
-        inv_mat[self.n_samples:, self.n_samples:] = d_inv + d_inv.dot(c.dot(w))
+class TSVR(ML):
+    def __init__(self, kernel, C1=1, C2=1):
+        ML.__init__(kernel, C1, C2)
 
-        return inv_mat
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None):
+        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+
 
 
 class IRWLS(ML):
-    # Todo implementation!!!!!!!
     """
     Implementation of the iterative reweighed least square support vector machine for the simultaneous learning of the
     function value and derivatives
     See:
     """
 
-    def __init__(self, kernel):
-        self._y = None
+    def __init__(self, kernel, C1=1., C2=1., epsilon=1e-3, epsilon_prime=1e-3, max_iter=1e4):
         self._mat = None
-        ML.__init__(self, kernel)
+        self.mat_size = None
+        self.epsilon = epsilon
+        self.epsilon_prime = epsilon_prime
+        self.max_iter = max_iter
 
-    def fitNEW(self, x_train, y_train, x_prime_train=None, y_prime_train=None, C=1., error_cap=10**-8, epsilon=0.01,
-            max_iter=10**3, eps=10**-4):
+        ML.__init__(self, kernel, C1, C2)
+
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, eps=1e-6):
+        if debug_flag:
+            self.debug_plotting = (list(), list(), list())
+            debug_idx_a = []
+            debug_idx_s = []
+
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
-        self._y = np.concatenate([self.y_train, self.y_prime_train.flatten()])
+        kernel_mat = create_mat(self.kernel, x_train, x_train, x1_prime=x_prime_train, x2_prime=x_prime_train,
+                                dx_max=self.n_dim, dy_max=self.n_dim)
+        self.mat_size = self.n_dim * self.n_samples_prime + self.n_samples + 1
+        self._mat = np.zeros([self.mat_size, self.mat_size])
+        self._mat[:-1, :-1] = kernel_mat
+        self._mat[:self.n_samples, -1] = 1.
+        self._mat[-1, :self.n_samples] = 1.
 
-        size_mat = self.n_samples + self.n_samples_prime * self.n_dim# + 1
-        # mat = np.zeros([size_mat, size_mat])
-        self._mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
-        mat = self._mat
-        # mat[:self.n_samples, -1] = 1.
-        # mat[-1, :self.n_samples] = 1.
-        # self._mat = mat
+        a = np.zeros(self.n_samples)
+        a_star = np.zeros(self.n_samples)
+        a[0::2] = self._reg_value # even
+        a_star[1::2] = self._reg_value # odd
 
-        a = np.zeros(size_mat)
-        a[0::2] = 2*C
-        a[1::2] = -2*C
+        s = np.zeros(self.n_samples_prime * self.n_dim)
+        s_star = np.zeros(self.n_samples_prime*self.n_dim)
+        s[0::2] = self._reg_derivative # even
+        s_star[1::2] = self._reg_derivative # odd
 
-        weight = np.zeros(size_mat)
+        weight = np.zeros(self.mat_size)
+        val_error, val_error_star, grad_error, grad_error_star = self.get_error(self._mat, weight)
+
         lagrangian = []
-        error = self._errorNEW(weight)
-        lagrangian.append(self._lagrangianNEW(weight, error, epsilon, C))
+        lagrangian.append(self.get_lagrangian(self._mat, weight, val_error + val_error_star,
+                                              grad_error + grad_error_star, flag=debug_flag))
 
         converged = False
         step = 0
         while not converged:
+            a = self.error_weight(self._reg_value, val_error, eps)
+            a_star = self.error_weight(self._reg_value, val_error_star, eps)
+            s = self.error_weight(self._reg_derivative, grad_error, eps)
+            s_star = self.error_weight(self._reg_derivative, grad_error_star, eps)
 
-            ind_a = a != 0
-            d_a = 1./a[ind_a] * np.eye(sum(ind_a))
-            # ind_a = np.concatenate([ind_a, np.array([1])])
-            ind_mat = np.tile(ind_a, size_mat).reshape(size_mat, size_mat)
-            calc_mat = mat[np.logical_and(ind_mat, ind_mat.T).reshape(size_mat,size_mat)].reshape(sum(ind_a), sum(ind_a))
-            calc_mat[:, :] += d_a
+            idx_a, idx_s, idx_weight = self._get_index(a, a_star, s, s_star)
 
-            weight_s = np.zeros(size_mat)
-            weight_s[ind_a] = np.linalg.inv(calc_mat).dot(self._y[ind_a])
+            if debug_flag:
+                debug_idx_a.append(sum(idx_a))
+                debug_idx_s.append(sum(idx_s))
+            target_vector = self._get_target(idx_a, idx_s, a, a_star, s, s_star)
 
-            nu = 0.1
-            weight_b = weight * (1 - nu) + nu * weight_s
-            error = self._errorNEW(weight_b)
-            l = self._lagrangianNEW(weight, error, epsilon, C)
+            mat = self._get_mat(idx_weight)
 
-            if (abs(lagrangian[-1]-l)/lagrangian[-1]) < eps:
+            mat[:sum(idx_a), :sum(idx_a)] += np.eye(sum(idx_a)) / (a[idx_a] + a_star[idx_a])
+            mat[sum(idx_a):-1, sum(idx_a):-1] += np.eye(sum(idx_s)) / (s[idx_s] + s_star[idx_s])
+
+            new_weight = np.zeros(self.mat_size)
+
+            new_weight[idx_weight] = np.linalg.solve(mat, target_vector)
+
+            mu = 1#*1e0
+            old_weight = cp.deepcopy(weight)
+            weight = old_weight * (1 - mu) + mu*new_weight
+            val_error, val_error_star, grad_error, grad_error_star = self.get_error(self._mat, weight) #[error_mat_idx[idx_weight], :]
+            lagrangian.append(self.get_lagrangian(self._mat, weight, val_error + val_error_star, grad_error + grad_error_star))
+            # lagrangian.append(self.get_lagrangian(self._get_mat(idx_weight), weight[idx_weight], val_error + val_error_star,
+            #                                       grad_error + grad_error_star))
+
+            if abs((lagrangian[-1] - lagrangian[-2])/lagrangian[-2]) <= eps:
                 converged = True
-            else:
-                con = True
-                m = .5
-                s = 0
-                while con:
-                    w = weight * (1-m) + weight_s * m
-                    error = self._errorNEW(weight_b)
-                    l = self._lagrangianNEW(weight, error, epsilon, C)
-                    # print(sum(error))
-                    if l <= (lagrangian[-1]*(1 + 10**-3)):
-                        con = False
-                    else:
-                        m /= 2
-                        s += 1
-                    if s > 1000:
-                        print(w)
-                        print(error)
-                        print(l)
-                        print(lagrangian)
-                        raise ValueError('IS NOT CONVERGED')
-                weight_b = w.copy()
-            lagrangian.append(l)
-            weight = weight_b.copy()
+                self.get_lagrangian(self._mat, weight, val_error + val_error_star,
+                                     grad_error + grad_error_star)
+                print('Lagrangian converged in step = ' + str(step))
 
-            error = self._errorNEW(weight)
-            a = np.zeros(size_mat)
-            ind = error >= epsilon
-            a[ind] = 2*C*(error[ind] - epsilon)/error[ind]
-            ind = error == 0
-            a[ind] = error_cap
-            a[a > error_cap] = error_cap
+            else:
+                pond = 0.5
+                conv = False
+                iter_step = 0
+                while not conv:
+                    dummy_weight = weight*pond + old_weight*(1 - pond)
+                    val_error, val_error_star, grad_error, grad_error_star = self.get_error(self._mat, dummy_weight)
+                    cost = self.get_lagrangian(self._mat, dummy_weight, val_error
+                                               + val_error_star, grad_error + grad_error_star)
+                    # cost = self.get_lagrangian(self._get_mat(idx_weight), dummy_weight[idx_weight], val_error
+                    #                            + val_error_star, grad_error + grad_error_star)
+
+                    if (cost <= lagrangian[-2]*(1 + 1e-7)):
+                        conv = True
+                    else:
+                        pond *= 0.5
+                    iter_step += 1
+                    if iter_step >= 1e2:
+                        conv = True
+
+                if debug_flag:
+                    # self.get_lagrangian(self._mat, dummy_weight, val_error + val_error_star, grad_error + grad_error_star,
+                    #                 flag=debug_flag)
+                    self.get_lagrangian(self._get_mat(idx_weight), dummy_weight[idx_weight], val_error
+                                        + val_error_star, grad_error + grad_error_star, flag=debug_flag)
+                weight = cp.copy(dummy_weight)
+                lagrangian[-1] = cost
 
             step += 1
-            if step > max_iter:
-                raise UserWarning('Not converged?')
-                break
+            if step > self.max_iter:
+                print('not converged')
+                converged = True
 
         self._alpha = weight[:self.n_samples]
-        self._beta = weight[self.n_samples:].reshape(-1,self.n_dim)
-        self._intercept = 0# weight[-1]
-        self._support_index_beta = np.array([np.arange(1, self.n_samples_prime)]*self.n_dim)
-        self._support_index_alpha = np.arange(1, self.n_samples, 1)
+        beta = weight[self.n_samples:-1]
+
+        self._support_index_alpha = np.arange(0, self.n_samples)[idx_a]
+        beta_idx = idx_s.reshape(self.n_dim, -1).T
+        self._support_index_beta = []
+        self._beta = beta.reshape(self.n_dim, -1).T
+        for ii in range(self.n_dim):
+            self._support_index_beta.append(np.arange(0, self.n_samples_prime)[beta_idx[:, ii]])
+
+        self._intercept = weight[-1]
         self._is_fitted = True
+        if debug_flag:
+            print(self._alpha[self._support_index_alpha].shape)
+            for ii in range(self.n_dim):
+                print(self._beta[self._support_index_beta[ii], ii].shape)
+            print(sum(idx_a))
+            print(sum(idx_s))
+            print(debug_idx_a[:10])
+            print(debug_idx_s[:10])
+            fig = plt.figure()
+            fig.add_subplot(221)
+            plt.plot(lagrangian)
+            plt.title('Lagrangian')
+            fig.add_subplot(222)
+            plt.plot(self.debug_plotting[0])
+            plt.title('weight reg')
+            fig.add_subplot(223)
+            plt.plot(self.debug_plotting[1])
+            plt.title('val error')
+            fig.add_subplot(224)
+            plt.plot(self.debug_plotting[2])
+            plt.title('grad error')
 
-    def _lagrangianNEW(self, weight, error, epsilon, C):
-        def loss(error, epsilon):
-            return error**2 + epsilon**2 - 2*error*epsilon
-
-        return 0.5*weight.T.dot(self._mat.dot(weight)) + C*np.sum(loss(error, epsilon))
-
-    def _errorNEW(self, weight):
-        error = weight.dot(self._mat) - self._y
-        return np.sqrt(error**2)
-
-
-    def _error_weight(self, error, constant, error_cap):
-        """
-        maximum error function with the cut at error_cap to avoid dividing by zero
-        :param error:
-        :param constant:
-        :param error_cap:
-        :return: error weights
-        """
-        weight = np.minimum(np.maximum(0., constant/error), constant/error_cap)
+    def error_weight(self, constant, error, epsilon):
+        weight = np.zeros_like(error)
+        weight[error > epsilon] = 2 * constant * (error[error >= epsilon] - epsilon) / error[error >= epsilon]
+        weight[np.logical_and(error < epsilon, error > 0.)] = constant / epsilon
+        weight[weight > 1 / epsilon] = 1 / epsilon
         return weight
 
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, C1=1., C2=1., error_cap=10**-8, epsilon=0.01,
-            max_iter=10**3, eps=10**-4):
-        """
-        Fit the model with given trainin data
-        :param x_train: function input pattern shape = [N_samples, N_features]
-        :param y_train: function values shape = [N_samples, 1]
-        :param x_prime_train: derivative input pattern shape = [N_samples, N_features]
-        :param y_prime_train: derivative values shape = [N_samples, N_features]
-        :param C1: penalty parameter to the function error
-        :param C2: penalty parameter to the derivative error
-        :param error_cap: cuts the maximum function
-        :param epsilon: parameter for the insensitive region around the curve
-        :param max_iter: maximum iterations
-        :param eps: used for convergence, if norm of the weights changes from on iteration to the next less than eps
-        :return:
-        """
-        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
-        self.y_prime_train = self.y_prime_train.flatten()
+    def _get_index(self, a, a_star, s, s_star):
+        idx_a = np.logical_or(a > 0., a_star > 0.)
+        idx_s = np.logical_or(s > 0., s_star > 0.)
+        idx_weight = np.concatenate([idx_a, idx_s, np.ones(1)])
+        idx_weight = np.ndarray.astype(idx_weight, dtype=bool)
+        return idx_a, idx_s, idx_weight
 
-        size_mat = self.n_samples + self.n_samples_prime * self.n_dim + 1
-        mat = np.zeros([size_mat, size_mat])
-        self._mat = self.create_mat(self.x_train, self.x_train, self.x_prime_train, self.x_prime_train)
-        mat[:-1, :-1] = self._mat
-        mat[:self.n_samples, -1] = 1.
-        mat[-1, :self.n_samples] = 1.
+    def _get_target(self, idx_a, idx_s, a, a_star, s, s_star):
+        return np.concatenate([self.y_train[idx_a] + (a[idx_a] - a_star[idx_a]) / (a[idx_a] + a_star[idx_a]) * self.epsilon,
+                               self.y_prime_train[idx_s] + (s[idx_s] - s_star[idx_s]) / (s[idx_s] + s_star[idx_s])
+                               * self.epsilon_prime, np.zeros([1])])
 
-        lagrangian = []
+    def _get_mat(self, idx_weight):
+        idx_mat = np.logical_and(np.tile(idx_weight, self.mat_size).reshape(self.mat_size, self.mat_size),
+                                 np.tile(idx_weight, self.mat_size).reshape(self.mat_size, self.mat_size).T)
+        mat = cp.copy(self._mat)
+        return mat[idx_mat].reshape(np.sum(idx_weight, dtype=int), np.sum(idx_weight, dtype=int))
 
-        # init error weights
-        a = np.zeros(self.n_samples * 2)
-        s = np.zeros(self.n_samples_prime * self.n_dim * 2)
-        a[0:self.n_samples:2] = C1
-        a[self.n_samples + 1::2] = C1
-        s[0:self.n_samples_prime * self.n_dim:2] = C2
-        s[self.n_samples_prime * self.n_dim + 1::2] = C2
+    def get_error(self, mat, weight):
+        prediction = mat.T.dot(weight)
 
-        support_index_alpha = np.arange(0, self.n_samples, 1)
-        support_index_beta = np.arange(0, self.n_samples_prime * self.n_dim, 1)
+        val_err = prediction[:self.n_samples]
+        val_error = val_err - self.y_train - self.epsilon
+        val_error_star = -val_err + self.y_train - self.epsilon
+        val_error[val_error < 0.] = 0.
+        val_error_star[val_error_star < 0.] = 0
 
-        step = 0
-        converged = False
-        alpha = np.zeros(self.n_samples)
-        beta = np.zeros(self.n_samples_prime* self.n_dim)
-        b = 0.
+        grad_err = prediction[self.n_samples:-1]
+        grad_error = grad_err - self.y_prime_train.flatten('F') - self.epsilon_prime
+        grad_error_star = -grad_err + self.y_prime_train.flatten('F') - self.epsilon_prime
+        grad_error[grad_error < 0.] = 0.
+        grad_error_star[grad_error_star < 0.] = 0.
 
-        f_error, g_error = self._error_function(alpha, beta, b, epsilon)
-        a = self._error_weight(f_error, C1, error_cap)
-        s = self._error_weight(g_error, C2, error_cap)
+        return val_error, val_error_star, grad_error, grad_error_star
 
-        lagrangian.append(self._lagrangian(alpha, beta, np.array([f_error[a > 0.], g_error[s > 0.]]), C1, C2))
+    def get_lagrangian(self, mat,  weight_vector, val_error, grad_error, flag=False):
+        weight_regularization = weight_vector.T.dot(mat.dot(weight_vector))/2.
+        val_error = self._reg_value * sum(self._error_func(val_error, self.epsilon))
+        grad_error = self._reg_derivative * sum(self._error_func(grad_error, self.epsilon_prime))
 
-        while not converged:
+        if flag:
+            self.debug_plotting[0].append(weight_regularization)
+            self.debug_plotting[1].append(val_error)
+            self.debug_plotting[2].append(grad_error)
+        return weight_regularization + val_error + grad_error
 
-            index_a = np.logical_or(a[:self.n_samples] > 0., a[self.n_samples:] > 0.)
-            index_s = np.logical_or(s[:self.n_samples_prime * self.n_dim] > 0., s[self.n_samples_prime * self.n_dim:] > 0.)
-
-            a_ = a[:self.n_samples][index_a]
-            a_star_ = a[self.n_samples:][index_a]
-            s_ = s[:self.n_samples_prime * self.n_dim][index_s]
-            s_star_ = s[self.n_samples_prime * self.n_dim:][index_s]
-
-            self._support_index_alpha = support_index_alpha[index_a]
-            self._support_index_beta = support_index_beta[index_s]
-            #
-            n_support_alpha = len(self._support_index_alpha)
-            n_support_beta = len(self._support_index_beta)
-
-            d_a = (np.eye(n_support_alpha) / (a_ - a_star_))
-            d_s = (np.eye(n_support_beta) / (s_ - s_star_))
-
-            weight_index = np.concatenate([index_a, index_s, np.array([1])])
-
-            index = np.logical_and(np.tile(weight_index, size_mat).reshape(size_mat, size_mat),
-                                   np.tile(weight_index, size_mat).reshape(size_mat, size_mat).T)
-
-            calc_mat = mat[index].reshape(n_support_alpha + n_support_beta + 1, n_support_alpha + n_support_beta + 1)
-
-            if n_support_alpha == 0:
-                # to avoid the singularity if just derivatives occur as support vectors
-                calc_mat[-1, -1] = 1
-                print('avoid singularity ' + str(step))
-
-            calc_mat[:n_support_alpha, :n_support_alpha] += d_a
-            calc_mat[n_support_alpha:-1, n_support_alpha:-1] += d_s
-
-            target_vec = np.concatenate([self.y_train[self._support_index_alpha] + ((a_ - a_star_) / (a_ + a_star_)) * epsilon,
-                                 self.y_prime_train.flatten()[self._support_index_beta]+ ((s_ - s_star_) / (s_ + s_star_)) * epsilon,
-                                 np.array([0])])
-
-            weight = np.linalg.inv(calc_mat).dot(target_vec)
-
-
-            alpha_s = np.zeros(self.n_samples)
-            alpha_s[self._support_index_alpha] = weight[:n_support_alpha]
-            beta_s = np.zeros(self.n_samples_prime * self.n_dim)
-            beta_s[self._support_index_beta] = weight[n_support_alpha:-1]
-            b_s = weight[-1]
-
-            # B old *(1-mu) + mu *B new
-            eta = 0.1
-            alpha_new = alpha * (1-eta) + eta * alpha_s
-            beta_new = beta *(1 - eta) + eta * beta_s
-            b_new = b*(1 - eta) + eta * b_s
-
-            f_error, g_error = self._error_function(alpha_new, beta_new, b_new, epsilon)
-            a = self._error_weight(f_error, C1, error_cap)
-            s = self._error_weight(g_error, C2, error_cap)
-            l = self._lagrangian(alpha_new, beta_new, np.array([f_error[a > 0.], g_error[s > 0.]]), C1, C2)
-            if (abs(l - lagrangian[-1])/lagrangian[-1]) < 10**-8:
-                lagrangian.append(l)
-                alpha = alpha_new.copy()
-                beta = beta_new.copy()
-                b = b_new
-                converged = True
-            else:
-                m = 0.5
-                con = True
-                while con:
-                    alpha_n = alpha_new + alpha_s * (1-m)
-                    beta_n = beta_new + beta_s* (1 - m)
-                    b_n = b_new + b_s * (1 - m)
-                    f_error, g_error = self._error_function(alpha_n, beta_n, b_n, epsilon)
-                    a = self._error_weight(f_error, C1, error_cap)
-                    s = self._error_weight(g_error, C2, error_cap)
-                    l = self._lagrangian(alpha_new, beta_new, np.array([f_error[a > 0.], g_error[s > 0.]]), C1, C2)
-
-                    if (l  <= lagrangian[-1]*(1 + 10**-3)):
-                        con = False
-                    else:
-                        m = m/2.
-
-                lagrangian.append(l)
-                alpha = alpha_n.copy()
-                beta = beta_n.copy()
-                b = b_n
-
-
-            # f_error, g_error = self._error_function(alpha, beta, b, epsilon)
-            # f_error_s, g_error_s = self._error_function(alpha_s, beta_s, b_s, epsilon)
-            #
-            #
-            # alpha += dir_alpha * eta
-            # beta += dir_beta * eta
-            # b += dir_b * eta
-            # alpha = alpha_s.copy()
-            # beta = beta_s.copy()
-            # b = b_s
-
-            f_error, g_error = self._error_function(alpha, beta, b, epsilon)
-            a = self._error_weight(f_error, C1, error_cap)
-            s = self._error_weight(g_error, C2, error_cap)
-
-            # lagrangian.append(self._lagrangian(alpha, beta, np.array([f_error[a > 0.], g_error[s > 0.]]), C1, C2))
-
-
-            # if step > 1:
-            #     if np.linalg.norm(alpha - alpha_old) < eps and np.linalg.norm(beta-beta_old) < eps and\
-            #             abs(b-b_old) < eps:
-            #         converged = True
-            #         print('parameter converged ' + str(step))
-            #
-            # if step > max_iter:
-            #     print('iteration is not converged ' + str(step))
-            #     converged = True
-            # step += 1
-
-        self._alpha = alpha.copy()
-        self._support_index_alpha = np.arange(1, self.n_samples, 1)
-        self._support_index_beta = np.array([np.arange(1, self.n_samples_prime)]*self.n_dim)
-        idx_beta = index_s.reshape(-1, self.n_dim)
-        self._support_index_beta = []
-        for ii in range(self.n_dim):
-            self._support_index_beta.append(np.arange(0,self.n_samples_prime, 1))#[idx_beta[:, ii]])
-        self._beta = beta.copy().reshape(-1, self.n_dim)
-        self._intercept = b
-        self.y_prime_train = self.y_prime_train.reshape(-1,self.n_dim)
-        self._is_fitted = True
-
-        plt.figure()
-        plt.plot(lagrangian)
-
-    def _error_function(self, alpha, beta, b, epsilon):
-        """
-        error calculation to the given training points in fit
-        :return: function error, derivative error
-        """
-        k = self._mat[:self.n_samples, :self.n_samples]
-        g = self._mat[:self.n_samples, self.n_samples:]
-        k_prime = self._mat[self.n_samples:, :self.n_samples]
-        j = self._mat[self.n_samples:, self.n_samples:]
-
-        func_error = np.zeros(self.n_samples * 2)
-        grad_error = np.zeros(self.n_samples_prime * self.n_dim * 2)
-        if self.n_samples != 0:
-            func_prediction = alpha[self._support_index_alpha].dot(k[self._support_index_alpha, :]) +\
-                              beta[self._support_index_beta].dot(k_prime[self._support_index_beta, :]) + b
-            func_error[:self.n_samples] = func_prediction - self.y_train - epsilon
-            func_error[self.n_samples:] = -func_prediction + self.y_train - epsilon
-        if self.n_samples_prime != 0:
-            grad_prediction = alpha[self._support_index_alpha].dot(g[self._support_index_alpha, :]) +\
-                              beta[self._support_index_beta].dot(j[self._support_index_beta, :])
-            grad_error[:self.n_samples_prime*self.n_dim] = grad_prediction - self.y_prime_train-epsilon
-            grad_error[self.n_samples_prime * self.n_dim:] = -grad_prediction + self.y_prime_train - epsilon
-
-        return func_error, grad_error
-
-    def _lagrangian(self, alpha, beta, error, C1, C2):
-        # only for function value
-        k = self._mat[:self.n_samples, :self.n_samples]
-        g = self._mat[:self.n_samples, self.n_samples:]
-        k_prime = self._mat[self.n_samples:, :self.n_samples]
-        j = self._mat[self.n_samples:, self.n_samples:]
-
-        if self.n_samples_prime != 0:
-            return 0.5 * (alpha.T.dot(k.dot(alpha)) + alpha.T.dot(g.dot(beta)) + beta.T.dot(k_prime.dot(alpha))
-               + beta.T.dot(j.dot(beta))) + C1 * sum(error[0]) + C2 * sum(error[1])
-        else:
-            return 0.5 * (alpha.T.dot(k.dot(alpha))) + C1 * sum(error[0])
+    def _error_func(self, error, epsilon, approximate_function='L2'):
+        l_value = np.zeros_like(error)
+        idx = error >= epsilon
+        if approximate_function == 'L2':
+            l_value[idx] = error[idx] ** 2 - 2*error[idx]*epsilon + epsilon**2
+        elif approximate_function =='L1':
+            l_value = error[idx]
+        return l_value
 
 
 class RLS(ML):
@@ -489,12 +387,11 @@ class RLS(ML):
     Implementation of the regularized least square method for simultaneous fitting of function value and derivatives
     See:
     """
-    def __init__(self, kernel, C1=None, C2=None):
-        ML.__init__(self, kernel)
-        self.C1 = C1
-        self.C2 = C2
+    def __init__(self, kernel, C1=1., C2=1., min_intercept=False):
+        self.min_intercept = min_intercept
+        ML.__init__(self, kernel, C1, C2)
 
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, minimze_b=False, C1=1., C2=1.):
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None):
         """
         Fitting a new model to a given training pattern
         :param x_train: function input pattern shape = [N_samples, N_features]
@@ -507,29 +404,20 @@ class RLS(ML):
         :return:
         """
 
-        if self.C1 is None:
-            self.C1 = C1
-        else:
-            C1 = self.C1
-        if self.C2 is None:
-            self.C2 = C2
-        else:
-            C2 = self.C2
-
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
         if self.n_samples_prime == 0:
             kernel_mat = create_mat(self.kernel, x_train, x_train, x_prime_train, x_prime_train, eval_gradient=False)
             kernel_mat[:self.n_samples, :self.n_samples] = kernel_mat[:self.n_samples, :self.n_samples]\
-                                                           + np.eye(self.n_samples) / C1
+                                                           + np.eye(self.n_samples) / self._reg_value
         else:
             kernel_mat = create_mat(self.kernel, x_train, x_train, x_prime_train, x_prime_train, dx_max=self.n_dim,
                                                                                                     dy_max=self.n_dim)
             kernel_mat[:self.n_samples, :self.n_samples] = kernel_mat[:self.n_samples, :self.n_samples] \
-                                                           + np.eye(self.n_samples)/C1
+                                                           + np.eye(self.n_samples)/self._reg_value
             kernel_mat[self.n_samples:, self.n_samples:] = kernel_mat[self.n_samples:, self.n_samples:] \
-                                                           + np.eye(self.n_samples_prime*self.n_dim) / C2
+                                                           + np.eye(self.n_samples_prime*self.n_dim) / self._reg_derivative
 
-        if not minimze_b:
+        if not self.min_intercept:
             mat_size = self.n_samples + self.n_samples_prime * self.n_dim + 1
             mat = np.zeros([mat_size, mat_size])
             mat[:-1, :-1] = kernel_mat
@@ -539,23 +427,17 @@ class RLS(ML):
             else:
                 mat[:self.n_samples, -1] = 1
                 mat[-1, :self.n_samples] = 1
-            # Todo implement inverting scheme
+
             vec = np.concatenate([self.y_train, self.y_prime_train.flatten('F'), np.zeros([1])])
-            self.mat = mat
-            mat = np.linalg.inv(mat)
 
         else:
             vec = np.concatenate([self.y_train, self.y_prime_train.flatten('F')])
-
             mat = kernel_mat
-            self.mat = mat
-            mat = np.linalg.inv(mat)
 
-        weight = mat.dot(vec)
+        weight = np.linalg.solve(mat, vec)
+
         self._alpha = weight[0:self.n_samples].reshape(-1).T
-        self.y_debug = vec
-
-        if not minimze_b:
+        if not self.min_intercept:
             self._intercept = weight[-1]
             self._beta = weight[self.n_samples:-1].reshape(self.n_dim, -1).T
         else:
@@ -567,28 +449,85 @@ class RLS(ML):
         for ii in range(self.n_dim):
             self._support_index_beta.append(np.arange(0, self.n_samples_prime, 1))
 
-        self.debug = kernel_mat
         self._is_fitted = True
 
 
 class GPR(ML):
-    # Todo derivatives fails--> probably kernel is wrong?
-    def __init__(self, kernel):
+    def __init__(self, kernel, noise_value=1e-10, noise_derivative=1e-10, opt_method='LBFGS_B', opt_parameter=True,
+                 opt_restarts=0, normalize_y=False):
         # RBF kernel only supported and a constant mean over all training points
         # cholesky matrix
-        self.L = None
-        self.y_mean = None
-        self.y_prime_mean = None
-
-        self._y_vec = None
         # noise is added to the main diagonal of the kernel matrix
         # this is done in the log marginal likelihood
+        self.L = None
+        self.y_mean = None
 
-        self.noise = None
-        self.noise_prime = None
+        self._target_vector = None
+
         self._opt_flag = True
+        self.opt_method = opt_method
 
-        ML.__init__(self, kernel)
+        self.opt_parameter = opt_parameter
+        self.opt_restarts = opt_restarts
+        self._normalize_y = normalize_y
+
+        ML.__init__(self, kernel, reg_value=noise_value, reg_derivative=noise_derivative)
+
+    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None):
+        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
+
+        if self._normalize_y:
+            self.y_mean = np.mean(y_train)
+        else:
+            self.y_mean = 0.
+        if self.x_prime_train is None:
+            self._target_vector = np.concatenate([self.y_train - self.y_mean])
+        else:
+            # self.y_prime_mean = np.mean(y_prime_train, axis=0)
+            self._target_vector = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten('F')])
+
+        if self.opt_restarts > 0:
+            self.opt_parameter = True
+
+        if self.opt_parameter:
+            initial_hyper_parameters = self.get_hyper_parameter()
+            opt_hyper_parameter = []
+            value = []
+            opt = self._opt_routine(initial_hyper_parameters)
+
+            opt_hyper_parameter.append(opt[0])
+            value.append(opt[1])
+
+            for ii in range(self.opt_restarts):
+                initial_hyper_parameters = []
+                bounds = self.kernel.bounds
+                for element in bounds:
+                    initial_hyper_parameters.append(np.random.uniform(element[0], element[1], 1))
+                initial_hyper_parameters = np.array(initial_hyper_parameters)
+                opt = self._opt_routine(initial_hyper_parameters)
+                opt_hyper_parameter.append(opt[0])
+                value.append(opt[1])
+
+            min_idx = np.argmin(value)
+            self.set_hyper_parameter(opt_hyper_parameter[min_idx])
+
+        if self.n_samples_prime == 0:
+            K = create_mat(self.kernel, self.x_train, self.x_train)
+            K += np.eye(K.shape[0]) * self._reg_value
+            self.L, alpha = self._cholesky(K)
+            self._alpha = alpha
+        else:
+            k_mat = create_mat(self.kernel, self.x_train, self.x_train, x1_prime=self.x_prime_train,
+                               x2_prime=self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim)
+            k_mat[:self.n_samples, :self.n_samples] += self._reg_value * np.eye(self.n_samples)
+            k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime * self.n_dim) * self._reg_derivative
+
+            self.L, alpha = self._cholesky(k_mat)
+            self._alpha = alpha[:self.n_samples]
+            self._beta = alpha[self.n_samples:].reshape(self.n_dim, -1).T
+
+        self._is_fitted = True
+        self._intercept = self.y_mean
 
     def get_hyper_parameter(self):
         return self.kernel.theta
@@ -599,67 +538,6 @@ class GPR(ML):
     def get_bounds(self):
         return self.kernel.bounds
         #
-
-    def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, noise=10**-10, noise_prime=10**-10,
-            restarts=0, fit_method='LBFGS_B', optimize_hyperparameter=True, normalize_y=False):
-        self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
-        self.noise = noise
-        self.noise_prime = noise_prime
-        if normalize_y:
-            self.y_mean = np.mean(y_train)
-        else:
-            self.y_mean = 0.
-        if self.x_prime_train is None:
-            self._y_vec = np.concatenate([self.y_train - self.y_mean])
-        else:
-            # self.y_prime_mean = np.mean(y_prime_train, axis=0)
-            self._y_vec = np.concatenate([self.y_train - self.y_mean, self.y_prime_train.flatten('F')])
-
-        if restarts > 0:
-            optimize_hyperparameter = True
-
-        if optimize_hyperparameter:
-            initial_hyper_parameters = self.get_hyper_parameter()
-            opt_hyper_parameter = []
-            value = []
-            opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
-
-            opt_hyper_parameter.append(opt[0])
-            value.append(opt[1])
-
-            for ii in range(restarts):
-                initial_hyper_parameters = []
-                bounds = self.kernel.bounds
-                for element in bounds:
-                    initial_hyper_parameters.append(np.random.uniform(element[0], element[1], 1))
-                initial_hyper_parameters = np.array(initial_hyper_parameters)
-                opt = self._opt_routine(initial_hyper_parameters, method=fit_method)
-                opt_hyper_parameter.append(opt[0])
-                value.append(opt[1])
-
-            min_ind = np.argmin(value)
-            self.set_hyper_parameter(opt_hyper_parameter[min_ind])
-
-        # print('opt hyper parameter = ' + str(self.get_hyper_parameter()))
-
-        if self.n_samples_prime == 0:
-            K = create_mat(self.kernel, self.x_train, self.x_train)
-            K += np.eye(K.shape[0]) * self.noise
-            self.L, alpha = self._cholesky(K)
-            self._alpha = alpha
-        else:
-            k_mat = create_mat(self.kernel, self.x_train, self.x_train, x1_prime=self.x_prime_train,
-                               x2_prime=self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim)
-            k_mat[:self.n_samples, :self.n_samples] += self.noise*np.eye(self.n_samples)
-            k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime * self.n_dim) * self.noise_prime
-            # k_mat += self.noise * np.eye(k_mat.shape[0])
-
-            self.L, alpha = self._cholesky(k_mat)
-            self._alpha = alpha[:self.n_samples]
-            self._beta = alpha[self.n_samples:].reshape(self.n_dim, -1).T
-
-        self._is_fitted = True
-        self._intercept = self.y_mean
 
     def optimize(self, hyper_parameter):
         self.set_hyper_parameter(hyper_parameter)
@@ -672,14 +550,14 @@ class GPR(ML):
         # gives vale of log marginal likelihood with the gradient
         if self.n_samples_prime == 0:
             k_mat, k_grad = create_mat(self.kernel, self.x_train, self.x_train, eval_gradient=True)
-            k_mat += np.eye(k_mat.shape[0]) * self.noise
+            k_mat += np.eye(k_mat.shape[0]) * self._reg_value
         else:
             k_mat, k_grad = create_mat(self.kernel, self.x_train, self.x_train, self.x_prime_train,
                                         self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim, eval_gradient=True)
-            k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples) * self.noise
-            k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime*self.n_dim)*self.noise_prime
+            k_mat[:self.n_samples, :self.n_samples] += np.eye(self.n_samples) * self._reg_value
+            k_mat[self.n_samples:, self.n_samples:] += np.eye(self.n_samples_prime*self.n_dim)*self._reg_derivative
         L, alpha = self._cholesky(k_mat)
-        log_mag_likelihood = -0.5*self._y_vec.dot(alpha) - np.log(np.diag(L)).sum() - L.shape[0]/2.*np.log(2*np.pi)
+        log_mag_likelihood = -0.5*self._target_vector.dot(alpha) - np.log(np.diag(L)).sum() - L.shape[0] / 2. * np.log(2 * np.pi)
 
         if not derivative:
             return log_mag_likelihood
@@ -698,22 +576,25 @@ class GPR(ML):
             print(self.get_hyper_parameter())
             # implement automatic increasing noise
             raise Exception('failed')
-        alpha = cho_solve((L, True), self._y_vec)
+        alpha = cho_solve((L, True), self._target_vector)
         return L, alpha
 
-    def _opt_routine(self, initial_hyper_parameter, method='LBFGS_B'):
-        if method == 'LBFGS_B':
+    def _opt_routine(self, initial_hyper_parameter):
+        if self.opt_method == 'LBFGS_B':
             self._opt_flag = True
             opt_hyper_parameter, value, opt_dict = sp_opt.fmin_l_bfgs_b(self.optimize, initial_hyper_parameter,
                                                                     bounds=self.get_bounds())
             if opt_dict["warnflag"] != 0:
                 warnings.warn("fmin_l_bfgs_b terminated abnormally with the state: %s" % opt_dict)
-        elif method == 'BFGS':
+        elif self.opt_method == 'BFGS':
+            raise NotImplementedError('Implementation is not finished.')
             # TODO return function value
             # TODO implementation
             self._opt_flag = False
             opt_hyper_parameter = sp_opt.fmin_bfgs(self.optimize, initial_hyper_parameter)
             value = 0
+        else:
+            raise NotImplementedError('Method is not implemented use method=LBFGS_B.')
 
         return opt_hyper_parameter, value
 
@@ -775,7 +656,9 @@ def check_matrix(mat):
 
 
 def create_mat(kernel, x1, x2, x1_prime=None, x2_prime=None, dx_max=0, dy_max=0, eval_gradient=False):
-
+    # creates the kernel matrix
+    # if x1_prime is None then no derivative elements are calculated.
+    # derivative elements are given in the manner of [dx1, dx2, dx3, ...., dxn]
     n, d = x1.shape
     if x1_prime is None:
         return kernel(x1, x2, dx=0, dy=0, eval_gradient=eval_gradient)
