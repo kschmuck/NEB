@@ -311,15 +311,15 @@ class Optimizer:
 
     def get_max_force(self, images):
         force = images[0].force_norm()
-        jj = 1
-        ii = 1
+        jj = 0
+        ii = 0
         for element in images[1:]:
             f = element.force_norm()
             ii = ii + 1
             if f > force:
                 jj = ii
                 force = f
-        print(str(force) + ' of image ' + str(jj+1))
+        print(str(force) + ' of image ' + str(jj))
         return jj
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,

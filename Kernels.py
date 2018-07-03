@@ -1,3 +1,25 @@
+"""
+Modified Kernel file from scikit-learn.
+Modification to the RBF-, Constant-Kernel, summation and multiplication:
+    Add derivative with respect to the input parameters to the kernel matrix
+    Derivative of the derived kernel matrix for the hyper parameter optimization
+    change in function calling
+
+
+Kernels for Gaussian process regression and classification.
+The kernels in this module allow kernel-engineering, i.e., they can be
+combined via the "+" and "*" operators or be exponentiated with a scalar
+via "**". These sum and product expressions can also contain scalar values,
+which are automatically converted to a constant kernel.
+
+All kernels allow (analytic) gradient-based hyperparameter optimization.
+The space of hyperparameters can be specified by giving lower und upper
+boundaries for the value of each hyperparameter (the search space is thus
+rectangular). Instead of specifying bounds, hyperparameters can also be
+declared to be "fixed", which causes these hyperparameters to be excluded from
+optimization.
+"""
+
 import scipy.spatial.distance as _spdist
 from abc import ABCMeta, abstractmethod
 import sklearn.gaussian_process
@@ -16,6 +38,8 @@ from sklearn.externals.funcsigs import signature
 # TODO Exponentiation Class  derivative with respect to x, y
 # TODO Matern Class  derivative with respect to x, y
 # ToDo modify description
+# Todo diag function for RBF-, Constant-Kernel
+
 
 def _check_length_scale(X, length_scale):
     length_scale = np.squeeze(length_scale).astype(float)
