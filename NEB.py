@@ -1,14 +1,20 @@
 import numpy as np
 import copy
+import xyz_file_writer as xyz_writer
+# import sympy.geometry as sym_geom
+# import sympy as sym
+import sys
 from optimize import SteepestDecent, Verlete, Fire, ConjuageGradient, BFGS
 import time
+from data_reader_writer import Reader, Writer
+
 
 ''' creation of the image positions --> class images '''
 def create_images(product, reactant, number_of_images):
 # cartesian coordinates!!
 # check if product size == as reactant size
     if not (len(product) == len(reactant)):
-        raise ValueError('size of product is not equal to size of reactant')
+        print('size of product is not equal to size of reactant')
     images = []
     img_positions = np.array([np.linspace(p, r, number_of_images + 2) for p, r in zip(product, reactant)])
     for element in img_positions.T:
@@ -59,7 +65,7 @@ def rotation_geometry(positions):
     return positions, rotation_matrix_a
 
 
-def get_tangent(img_0, img_1, img_2, method='simple_improved'):
+def get_tangent(img_0, img_1, img_2, method='improved'):
     # img_i is one image
     # img_0 = image before
     # img_1 = current image, at this image the tangent is set.
@@ -110,8 +116,6 @@ def get_tangent(img_0, img_1, img_2, method='simple_improved'):
                 tangent = t_p * maximum + t_m * minimum
             else:
                 tangent = t_p * minimum + t_m * maximum
-    else:
-        raise NotImplementedError('Method is not implemented')
     tangent = tangent / np.linalg.norm(tangent)
     return tangent
 
@@ -135,7 +139,6 @@ class ImageSet(list):
         self.energy_gradient_func = None
         self.atom_list = atom_list
         # self.tangent_calc_name=
-        # for the machine learning to have all old points and to get some impression of the process
 
     def set_positions(self, positions):
         # positions in a 3D matrix num_images x atoms x coordinates
@@ -152,7 +155,7 @@ class ImageSet(list):
     def get_image_position_list(self):
         positions = []
         for element in self:
-            positions.append(np.reshape(element.position[-1], [len(self.atom_list), 3]))
+            positions.append(np.reshape(element.position, [len(self.atom_list), 3]))
         return positions
 
     def get_image_energy_list(self):
@@ -219,7 +222,7 @@ class ImageSet(list):
             for element in self[1:-1]:
                 element.spring_constant = spring_constant
         self[0].spring_constant = 0.0
-        self[1].spring_constant = 0.0
+        self[-1].spring_constant = 0.0
 
     def number_images_check(self):
         if len(self) < 3:
@@ -229,6 +232,9 @@ class ImageSet(list):
         index = self.get_index_image_energy_max()
         self[index].spring_constant = 0.0
         self[index].climbing_image = True
+        print('**************************')
+        print('climbing image: ' + str(index))
+        print('**************************')
         return index
 
     def get_index_image_energy_max(self):
@@ -271,10 +277,14 @@ class Image:
         self.energy.append(energy)
 
     def update_energy_gradient(self, energy_gradient_function, *args):
-        energy, gradient, scf_guess = energy_gradient_function(self.get_current_position(), *args)
-        self.energy.append(energy)
-        self.gradient.append(gradient)
-        self.scf_guess = scf_guess
+        if self.frozen:
+            self.energy.append(self.get_current_energy())
+            self.gradient.append(self.get_current_gradient())
+        else:
+            energy, gradient, scf_guess = energy_gradient_function(self.get_current_position(), *args)
+            self.energy.append(energy)
+            self.gradient.append(gradient)
+            self.scf_guess = scf_guess
 
     def get_current_position(self):
         return self.position[-1]
@@ -311,8 +321,8 @@ class Optimizer:
 
     def get_max_force(self, images):
         force = images[0].force_norm()
-        jj = 0
-        ii = 0
+        jj = 1
+        ii = 1
         for element in images[1:]:
             f = element.force_norm()
             ii = ii + 1
@@ -320,13 +330,13 @@ class Optimizer:
                 jj = ii
                 force = f
         print(str(force) + ' of image ' + str(jj))
-        return jj
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
-                freezing=0, tangent_method='simple_improved'):
+                freezing=0, tangent_method='improved', write_geom=False, print_step=False):
+
         self.fmax = force_max
         images.set_optimizer(optimizer)
-
+        sys.stdout.flush()
         converged = False
         step = 0
         if rm_rot_trans:
@@ -336,15 +346,27 @@ class Optimizer:
         if not opt_minima:
             lower = 1
             upper = -1
+            images[0].frozen = True
+            images[-1].frozen = True
         else:
             lower = 0
             upper = len(images)+1
-        t = time.clock()
+
         while not converged:
+            sys.stdout.flush()
             for element in images[lower:upper]:
                 if not element.frozen:
                     opt_method = element.optimizer
                     element.set_position(opt_method.step(element.get_energy_force, element.get_current_position()))
+            if print_step:
+                print('nudged elastic band step = %d') % (step)
+                uu = 0
+                for element in images:
+                    print('force %f of image %d ') %(element.force_norm(), uu)
+                    uu += 1
+
+            if write_geom:
+                xyz_writer.write_images2File(images.get_positions(), 'NEB_'+ str(step)+'.xyz', images.atom_list)
 
             if rm_rot_trans:
                 images.update_rot_Mat()
@@ -365,15 +387,14 @@ class Optimizer:
 
             if self.is_converged(images[lower:upper]):
                 converged = True
-                print('Nudged elastic band converged ' + str(step))
+                print('converged ' + str(step))
                 # for element in images[lower:upper]:
                 #     print(element.force_norm())
-            # print(time.clock()-t)
             step += 1
             if step >= max_steps:
-                print('Nudged elastic band not converged ' + str(step))
-                # for element in images[lower:upper]:
-                #     print(element.force_norm())
+                print('not converged ' + str(step))
+                for element in images[lower:upper]:
+                    print(element.force_norm())
                 break
         return images
 
