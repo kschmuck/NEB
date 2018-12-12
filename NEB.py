@@ -1,6 +1,5 @@
 import numpy as np
-import copy
-import xyz_file_writer as xyz_writer
+import copy, os
 # import sympy.geometry as sym_geom
 # import sympy as sym
 import sys
@@ -265,10 +264,19 @@ class Image:
         self.optimizer = None
         self.d_ij_k = None
 
+        self.max_displacement = None
+        self.displacement_ref = None # position
+
         self.position.append(position)
 
     def set_position(self, position):
         self.position.append(position)
+
+    def set_displacement_ref(self, ref):
+        if isinstance(ref, int):
+            self.displacement_ref = self.position[ref]
+        elif isinstance(ref, np.ndarray):
+            self.displacement_ref = ref
 
     def set_gradient(self, gradient):
         self.gradient.append(gradient)
@@ -307,6 +315,12 @@ class Image:
         energy, force = self.get_energy_force()
         return np.linalg.norm(force)
 
+    def get_displacement(self):
+        if self.displacement_ref is None:
+            self.set_displacement_ref(0)
+        displacement = np.linalg.norm(self.displacement_ref.reshape([-1, 3]) - self.get_current_position().reshape([-1, 3]), axis=1)
+        return np.max(displacement)
+
 
 class Optimizer:
     # Optimizer for the Nudged elastic band
@@ -332,13 +346,13 @@ class Optimizer:
         print(str(force) + ' of image ' + str(jj))
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
-                freezing=0, tangent_method='improved', write_geom=False, print_step=False):
+                freezing=0, tangent_method='improved', write_geom=False, print_step=False, max_displacement=None):
 
         self.fmax = force_max
         images.set_optimizer(optimizer)
         sys.stdout.flush()
-        converged = False
         step = 0
+
         if rm_rot_trans:
             images.update_rot_Mat()
         images.update_images(tangent_method)
@@ -352,6 +366,8 @@ class Optimizer:
             lower = 0
             upper = len(images)+1
 
+        converged = 0
+        # TODO: converged with numbers bool(0) = False, bool(1) = True, bool(2) = True to detect convergence
         while not converged:
             sys.stdout.flush()
             for element in images[lower:upper]:
@@ -366,7 +382,7 @@ class Optimizer:
                     uu += 1
 
             if write_geom:
-                xyz_writer.write_images2File(images.get_positions(), 'NEB_'+ str(step)+'.xyz', images.atom_list)
+                Writer().write( os.path.join('./Results', 'NEB_Run', str(step)+'.xyz'), images.get_positions(), images.atom_list)
 
             if rm_rot_trans:
                 images.update_rot_Mat()
@@ -386,16 +402,31 @@ class Optimizer:
                                 element.count_frozen = freezing
 
             if self.is_converged(images[lower:upper]):
-                converged = True
+                converged = 2
                 print('converged ' + str(step))
                 # for element in images[lower:upper]:
                 #     print(element.force_norm())
             step += 1
+
+            if max_displacement is not None:
+                for ii in range(len(images)):
+                    if images[ii].get_displacement() > max_displacement:
+                        print('Displacement of image %i = %2.4f > %2.4f max displacement in step %i') \
+                                        % (ii, images[ii].get_displacement(), max_displacement, step)
+                        converged = 3
+
             if step >= max_steps:
                 print('not converged ' + str(step))
-                for element in images[lower:upper]:
-                    print(element.force_norm())
+
+                converged = 1
                 break
+        if converged == 1:
+            for element in images[lower:upper]:
+                print(element.force_norm())
+        elif converged == 2:
+            pass
+        elif converged == 3:
+            print('Increase max displacement')
         return images
 
     class SteepestDecentNeb(SteepestDecent):
