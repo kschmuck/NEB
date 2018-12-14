@@ -97,7 +97,7 @@ def get_tangent(img_0, img_1, img_2, method='improved'):
     # Journal of chemical Physics, Volume 113, number 22
     # equation: 8-11
     # energy weighted tangent, useful if energy changes rapidly between the images
-    elif method == 'improved':
+    elif method == 'improved' or method == 'energy_weighted ':
         def min_max(energy_0, energy_1, energy_2):
             a = abs(energy_2 - energy_1)
             b = abs(energy_0 - energy_1)
@@ -315,6 +315,11 @@ class Image:
         energy, force = self.get_energy_force()
         return np.linalg.norm(force)
 
+    def force_rms(self):
+        energy, force = self.get_energy_force()
+        force = force.reshape([-1,3])
+        return np.mean(np.linalg.norm(force, axis=1))
+
     def get_displacement(self):
         if self.displacement_ref is None:
             self.set_displacement_ref(0)
@@ -326,33 +331,54 @@ class Optimizer:
     # Optimizer for the Nudged elastic band
     def __init__(self): # , trust_radius, fmax
         self.fmax = None
+        self.conv_criteria = 0 # 0 is force norm, 1 is rmsq
 
     def is_converged(self, imgs):
-        for element in imgs:
-            if element.force_norm() > self.fmax:
-                return False
-        return True
+        if self.conv_criteria == 0:
+            for element in imgs:
+                if element.force_norm() > self.fmax:
+                    return False
+            return True
+        elif self.conv_criteria == 1:
+            for img in imgs:
+                if img.force_rms() > self.fmax:
+                    return False
+                return True
 
     def get_max_force(self, images):
-        force = images[0].force_norm()
-        jj = 1
-        ii = 1
-        for element in images[1:]:
-            f = element.force_norm()
-            ii = ii + 1
-            if f > force:
-                jj = ii
-                force = f
-        print(str(force) + ' of image ' + str(jj))
+        if self.conv_criteria == 0:
+            force = images[0].force_norm()
+            jj = 1
+            ii = 1
+            for element in images[1:]:
+                f = element.force_norm()
+                ii = ii + 1
+                if f > force:
+                    jj = ii
+                    force = f
+            print(str(force) + ' of image ' + str(jj))
+        elif self.conv_criteria == 1:
+            force = images[0].force_rms()
+            jj = 1
+            ii = 1
+            for element in images[1:]:
+                f = element.force_rms()
+                ii = ii + 1
+                if f > force:
+                    jj = ii
+                    force = f
+            print(str(force) + ' of image ' + str(jj))
 
     def run_opt(self, images, optimizer, max_steps=10000, force_max=0.05, opt_minima=False, rm_rot_trans=False,
-                freezing=0, tangent_method='improved', write_geom=False, print_step=False, max_displacement=None):
+                freezing=0, tangent_method='improved', write_geom=False, print_step=False, max_displacement=None,
+                conv_criteria=0):
 
+        self.conv_criteria = conv_criteria
         self.fmax = force_max
         images.set_optimizer(optimizer)
         sys.stdout.flush()
+        converged = False
         step = 0
-
         if rm_rot_trans:
             images.update_rot_Mat()
         images.update_images(tangent_method)
@@ -366,8 +392,6 @@ class Optimizer:
             lower = 0
             upper = len(images)+1
 
-        converged = 0
-        # TODO: converged with numbers bool(0) = False, bool(1) = True, bool(2) = True to detect convergence
         while not converged:
             sys.stdout.flush()
             for element in images[lower:upper]:
@@ -382,7 +406,8 @@ class Optimizer:
                     uu += 1
 
             if write_geom:
-                Writer().write( os.path.join('./Results', 'NEB_Run', str(step)+'.xyz'), images.get_positions(), images.atom_list)
+                Writer().write(os.path.join('./Results', 'NEB_Run', str(step)+'.xyz'), images.get_positions(),
+                                images.atom_list, energy=images.get_image_energy_list())
 
             if rm_rot_trans:
                 images.update_rot_Mat()
@@ -402,7 +427,7 @@ class Optimizer:
                                 element.count_frozen = freezing
 
             if self.is_converged(images[lower:upper]):
-                converged = 2
+                converged = True
                 print('converged ' + str(step))
                 # for element in images[lower:upper]:
                 #     print(element.force_norm())
@@ -413,20 +438,13 @@ class Optimizer:
                     if images[ii].get_displacement() > max_displacement:
                         print('Displacement of image %i = %2.4f > %2.4f max displacement in step %i') \
                                         % (ii, images[ii].get_displacement(), max_displacement, step)
-                        converged = 3
+                        converged = True
 
             if step >= max_steps:
                 print('not converged ' + str(step))
-
-                converged = 1
+                for element in images[lower:upper]:
+                    print(element.force_norm())
                 break
-        if converged == 1:
-            for element in images[lower:upper]:
-                print(element.force_norm())
-        elif converged == 2:
-            pass
-        elif converged == 3:
-            print('Increase max displacement')
         return images
 
     class SteepestDecentNeb(SteepestDecent):
