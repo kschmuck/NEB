@@ -1,5 +1,5 @@
 import numpy as np
-
+import re
 
 class Writer:
 
@@ -14,15 +14,13 @@ class Writer:
         atom_number = len(atom_list)
         f = open(filename, 'w')
 
-        if energy is not None:
-            comment = 'energy '
-        else:
-            comment = ''
-
-        for element in positions:
+        for ii in range(0, len(positions)):
             f.write(str(atom_number) + '\n')
-            f.write(comment+'\n')
-            f.writelines(self.create_position_string(element, atom_list))
+            if energy is not None:
+                f.write('image #: %i Energy = %5.6 \n') %(ii, energy[ii])
+            else:
+                f.write('\n')
+            f.writelines(self.create_position_string(positions[ii], atom_list))
         f.close()
 
     def create_position_string(self, position, atom_list):
@@ -66,7 +64,6 @@ class Reader:
                 break
             line = f.readline()
             atom_number = int(line)
-
             atoms = []
             image = []
             geometry = []
@@ -89,7 +86,10 @@ class Reader:
 
     def read_new(self, filename):
         self.images = []
-
+        energy_pattern = re.compile('Energy = -?\d+.\d+')
+        num_pattern = re.compile('-?\d+.\d+')
+        comment_line = ''
+        comment = False
         with open(filename, 'r') as fin:
             if filename[-4:] == '.xyz':
                 # first line should be the number of atoms
@@ -110,13 +110,11 @@ class Reader:
                     else:
                         if comment:
                             # comment line
-                            line_elements = line.split()
-                            if line.startswith('energy'):
-                                energy = float(line_elements[1])
+                            comment_line = line
+                            if bool(re.findall(energy_pattern, line)):
+                                energy = float(re.findall(num_pattern, re.findall(energy_pattern, line)[0])[0])
                                 energy_flag = True
-                            else:
-                                comment = line
-                                energy_flag = False
+
                             comment = False
                         else:
                             # geometry block
@@ -127,8 +125,9 @@ class Reader:
                         # after all lines of geometry block are readed
                         if atom_counter == 0:
                             if energy_flag:
-                                image = {'atoms': atoms, 'geometry': geometry, 'energy': energy}
+                                image = {'atoms': atoms, 'geometry': geometry, 'comment': comment_line, 'energy': energy}
                             else:
-                                image = {'atoms': atoms, 'geometry': geometry, 'comment': comment}
+                                image = {'atoms': atoms, 'geometry': geometry, 'comment': comment_line, 'energy': None}
                             self.images.append(image)
+                            comment_line = ''
                             energy_flag = False
