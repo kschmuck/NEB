@@ -148,19 +148,17 @@ class SMO(ML):
     def fit(self, x_train, y_train, x_prime_train=None, y_prime_train=None, alpha_tol=1e-3, tol=1e-3):
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
         self._mat_size = self.n_samples + self.n_samples_prime*self.n_dim + 1
-
         self.alpha_tol = alpha_tol
         self.tol = tol
         self._x_vec = self.x_train
         # self._x_vec = np.concatenate([self.x_train, self.x_prime_train])
-        self._weight = np.ones(self._mat_size)
+        self._weight = np.zeros(self._mat_size)
         self._mat = np.zeros([self._mat_size, self._mat_size])
         self._mat[-1, :self.n_samples] = 1
         self._mat[:self.n_samples, -1] = 1
         self._mat[:-1, :-1] = create_mat(self.kernel, self.x_train, self.x_train, x1_prime=self.x_prime_train,
                                          x2_prime=self.x_prime_train, dx_max=self.n_dim, dy_max=self.n_dim)
         self._error = self._y_target - self._mat[:-1, :].dot(self._weight)
-        self._intercept = self._weight[-1]
 
         self.train()
         self._is_fitted = True
@@ -190,10 +188,10 @@ class SMO(ML):
         if (L == H):
             return 0
 
-        # Compute kernel & 2nd derivative eta ToDO
-        k11 = self._mat[i1, i1]#self.kernel(self._x_vec[i1], self._x_vec[i1])
-        k12 = self._mat[i1,i2] #self.kernel(self._x_vec[i1], self._x_vec[i2])
-        k22 = self._mat[i2,i2] #self.kernel(self._x_vec[i2], self._x_vec[i2])
+        # Compute kernel & 2nd derivative eta
+        k11 = self.kernel(self._x_vec[i1], self._x_vec[i1])
+        k12 = self.kernel(self._x_vec[i1], self._x_vec[i2])
+        k22 = self.kernel(self._x_vec[i2], self._x_vec[i2])
         eta = 2 * k12 - k11 - k22
 
         # Compute new alpha 2 (a2) if eta is negative
@@ -238,8 +236,8 @@ class SMO(ML):
 
         # Update threshold b to reflect newly calculated alphas
         # Calculate both possible thresholds
-        b1 = E1 + y1 * (a1 - alph1) * k11 + y2 * (a2 - alph2) * k12 + self._intercept
-        b2 = E2 + y1 * (a1 - alph1) * k12 + y2 * (a2 - alph2) * k22 + self._intercept
+        b1 = E1 + y1 * (a1 - alph1) * k11 + y2 * (a2 - alph2) * k12 + model.b
+        b2 = E2 + y1 * (a1 - alph1) * k12 + y2 * (a2 - alph2) * k22 + model.b
 
         # Set new threshold based on if a1 or a2 is bound by L and/or H
         if 0 < a1 and a1 < C:
@@ -263,7 +261,8 @@ class SMO(ML):
         # Set non-optimized errors based on equation 12.11 in Platt's book
         non_opt = [n for n in range(self.n_samples) if (n != i1 and n != i2)]
         self._error[non_opt] = self._error[non_opt] + \
-                                y1 * (a1 - alph1) * self._mat[i1, non_opt] + y2 * (a2 - alph2) * self._mat[i2, non_opt] + self._intercept-b_new # #self.kernel(self._x_vec[i1], self._x_vec[non_opt]) + self.kernel(self._x_vec[i2], self._x_vec[non_opt]) + self._intercept - b_new
+                                y1 * (a1 - alph1) * self.kernel(self._x_vec[i1], self._x_vec[non_opt]) + \
+                                y2 * (a2 - alph2) * self.kernel(self._x_vec[i2], self._x_vec[non_opt]) + self._intercept - b_new
 
         # Update model threshold
         self._intercept = b_new
@@ -291,7 +290,7 @@ class SMO(ML):
                     return 1
 
             # Loop through non-zero and non-C alphas, starting at a random point
-            for i1 in np.roll(np.where((self._weight[:-1]!= 0) & (self._weight[:-1]!= self._reg_value))[0],
+            for i1 in np.roll(np.where((self._weight!= 0) & (self._weight!= self._reg_value))[0],
                               np.random.choice(np.arange(self.n_samples))):
                 step_result = self.take_step(i1, i2)
                 if step_result:
@@ -299,7 +298,7 @@ class SMO(ML):
 
             # loop through all alphas, starting at a random point
             for i1 in np.roll(np.arange(self.n_samples), np.random.choice(np.arange(self.n_samples))):
-                step_result = self.take_step(i1, i2)
+                step_result, model = self.take_step(i1, i2, model)
                 if step_result:
                     return 1
 
@@ -314,7 +313,7 @@ class SMO(ML):
             numChanged = 0
             if examineAll:
                 # loop over all training examples
-                for i in range(self._weight[:-1].shape[0]):
+                for i in range(self._weight.shape[0]):
                     examine_result = self.examine_example(i)
                     numChanged += examine_result
                     if examine_result:
@@ -322,7 +321,7 @@ class SMO(ML):
                         self._obj.append(obj_result)
             else:
                 # loop over examples where alphas are not already at their limits
-                for i in np.where((self._weight[:-1] != 0) & (self._weight[:-1] != self._reg_value))[0]:
+                for i in np.where((self._weight != 0) & (self._weight != self._reg_value))[0]:
                     examine_result = self.examine_example(i)
                     numChanged += examine_result
                     if examine_result:
@@ -651,8 +650,6 @@ class IRWLS(ML):
         self._fit(x_train, y_train, x_prime_train=x_prime_train, y_prime_train=y_prime_train)
         kernel_mat = create_mat(self.kernel, x_train, x_train, x1_prime=x_prime_train, x2_prime=x_prime_train,
                                 dx_max=self.n_dim, dy_max=self.n_dim)
-
-
         self.mat_size = self.n_dim * self.n_samples_prime + self.n_samples + 1
         self._mat = np.zeros([self.mat_size, self.mat_size])
         self._mat[:-1, :-1] = kernel_mat
@@ -784,7 +781,7 @@ class IRWLS(ML):
 
     def error_weight(self, constant, error, epsilon):
         weight = np.zeros_like(error)
-        weight[error > epsilon] = 2 * constant * (error[error >= epsilon] - epsilon) / error[error >= epsilon]
+        weight[error >= epsilon] = 2 * constant * (error[error >= epsilon] - epsilon) / error[error >= epsilon]
         weight[np.logical_and(error < epsilon, error > 0.)] = constant / epsilon
         weight[weight > 1 / epsilon] = 1 / epsilon
         return weight
@@ -910,7 +907,7 @@ class RLS(ML):
         :param y_prime_train: derivative values shape = [N_samples, N_features]
         :param C1: penalty parameter to the function error
         :param C2: penalty parameter to the derivative error
-        :param min_intercept: changes the behaviour to minimize the weights and the bias, default False minimizee only weights
+        :param minimze_b: changes the behaviour to minimize the weights and the bias, default False minimizee only weights
         :return:
         """
 
@@ -1010,7 +1007,6 @@ class GPR(ML):
             self.y_mean = np.mean(y_train)
         else:
             self.y_mean = 0.
-
         if self.x_prime_train is None:
             self._target_vector = np.concatenate([self.y_train - self.y_mean])
         else:
