@@ -1,92 +1,103 @@
 import numpy as np
-import NEB as neb
-import xyz_file_writer as xyz_writer
+import NEB
 import IDPP as idpp
-from copy import deepcopy
-from pes import energy_gradient
-from data_reader_writer import Reader, Writer
+import ammonia_PES, ethane_PES, Pt4C3H8_PES, Pt4C1H4_PES
+# from pes import energy_gradient
+import data_reader_writer
+import copy, os, time, sys
 
-# Ethane
-# opt minima --> with permutation
-# minima_a = np.array([
-#     -1.15706, -1.01589,  0.06129, # N
-#     -1.15706,  0.45486, -0.91044, # F
-#     -1.15706,  0.56102,  0.84914, # O
-#     -0.76316, -0.00000, -0.00000, # C
-#      0.76316,  0.00000,  0.00000, # C
-#      1.15706, -0.45486,  0.91043, # H
-#      1.15707, -0.56102, -0.84914, # H
-#      1.15706,  1.01589, -0.06129]) # H
-#
-#
-# minima_b = np.array([
-#     -1.15706,  0.45486, -0.91044, # F
-#     -1.15706,  0.56102,  0.84914, # O
-#     -1.15706, -1.01589,  0.06129, # N
-#     -0.76316, -0.00000, -0.00000, # C
-#      0.76316,  0.00000,  0.00000, # C
-#      1.15706, -0.45486,  0.91043, # H
-#      1.15707, -0.56102, -0.84914, # H
-#      1.15706,  1.01589, -0.06129]) # H
-#
-# atom_list = ['H', 'H', 'H', 'C', 'C', 'H', 'H', 'H']
-#
-# # Ammonia
-# minima_a = np.array([-0.14924, -0.18579,  0.12047,
-#                       0.15186,  0.50780,  0.77412,
-#                       0.66350, -0.59496, -0.29304,
-#                      -0.66612,  0.27295, -0.60155])
-#
-# minima_b = np.array([0.14924,   0.18579, -0.12047,
-#                      0.15186,   0.50780,  0.77412,
-#                      0.66350,  -0.59496, -0.29304,
-#                     -0.66612,   0.27295, -0.60155])
-# atom_list = ['N', 'H', 'H', 'H']
-# chemical accuracy 0.043 eV
-number_of_images = 10
-k = 10**-6# 10**-10 #10**-6
+# molecule = 'Ethane'
+#molecule = 'Ammonia'
+# molecule = 'Pt4C3H8'
+molecule = 'Pt4C1H4'
+
+n_imgs = 7
+
+k = 1e-3 # 10**-10 #10**-6
 delta_t_fire = 3.5 #3.5
-delta_t_verlete = 0.2 #0.2
-force_max = 0.3
-max_steps = 600
-epsilon = 0.01 #00001
-trust_radius = 0.1 #.1
-# # --------------------
+force_max = 2e-2 # 0.001 Ammonia 0.002 Ethane 0.02 Pt4C1H4
+max_steps = 500
+trust_radius = 0.05 #.1
+# neb_method = 'simple_improved'
+neb_method = 'improved'
 
-reader = Reader()
-reader.read('same1_lower.xyz')
+max_displacement = None
 
-atom_list = reader.atom_list
-minima_a = np.array(reader.geometries).reshape(-1)
+calc_idpp = True
+print_step = True # True
+write_geom = True # True
+
+file_path = os.path.dirname(__file__)
+result_path = os.path.join(file_path, 'Results', molecule)
+reader = data_reader_writer.Reader()
+reader.read_new(os.path.join(result_path, 'minima.xyz'))
+imgs = reader.images
+atoms = imgs[0]['atoms']
+minima_a = np.array(imgs[0]['geometry']).flatten()
+minima_b = np.array(imgs[1]['geometry']).flatten()
+# print(minima_a)
+
+if molecule == 'Ammonia':
+	energy_gradient = ammonia_PES.energy_and_gradient
+elif molecule == 'Ethane':
+	energy_gradient = ethane_PES.energy_and_gradient
+elif molecule == 'Pt4C3H8':
+	energy_gradient = Pt4C3H8_PES.energy_and_gradient
+elif molecule == 'Pt4C1H4':
+	energy_gradient = Pt4C1H4_PES.energy_and_gradient
+
+images = NEB.create_images(minima_a, minima_b, n_imgs)
+images = NEB.ImageSet(images, atoms)
+writer = data_reader_writer.Writer()
+
+writer.write(os.path.join(result_path, molecule + '_' + neb_method + '_initial_Path.xyz'), images.get_positions(), atoms)
+if calc_idpp :
+	k_idpp = 1e-4
+	delta_t_fire_idpp= 3.5
+	force_max_idpp = force_max*10
+	max_steps_idpp = 1000
+	trust_radius_idpp = 0.05
+	neb_method_idpp = neb_method
+
+	print("molecule idpp = " + molecule + "\n k = %f \n opt_method = Fire \n delta_t_fire = %f \n force_max = %f \n"
+										  " max_steps = %d \n trust_radius = %f \n tangent_method = %s") \
+		 % (k_idpp, delta_t_fire_idpp, force_max_idpp, max_steps_idpp, trust_radius_idpp, neb_method_idpp)
+	images.set_spring_constant(k_idpp)
+	opt_fire = NEB.Optimizer.FireNeb(delta_t_fire_idpp, 2 * delta_t_fire_idpp, trust_radius_idpp)
+	idpp_potential = idpp.IDPP(images)
+	images.energy_gradient_func = idpp_potential.energy_gradient_idpp_function
+	opt = NEB.Optimizer()
+	images = opt.run_opt(images, opt_fire, max_steps=max_steps_idpp, force_max=force_max_idpp, rm_rot_trans=False, freezing=3, opt_minima=False)
+	writer.write(os.path.join(result_path, molecule + '_idpp_structure.xyz'), images.get_positions(), atoms)
+	for img in images:
+		img.frozen = False
 
 
-reader.read('sli.xyz')
-minima_b = np.array(reader.geometries).reshape(-1)
+sys.stdout.flush()
+print("molecule = " + molecule + "\n k = %f \n opt_method = Fire \n delta_t_fire = %f \n force_max = %f \n max_steps = %d \n trust_radius = %f \n tangent_method = %s") %(k, delta_t_fire, force_max, max_steps, trust_radius, neb_method)
 
-import time
+images.set_spring_constant(k)
+images.energy_gradient_func = energy_gradient
 t = time.clock()
 
-images = neb.create_images(minima_a, minima_b, number_of_images)
-images = neb.ImageSet(images, atom_list=atom_list)
-images.set_spring_constant(k)
+opt_fire = NEB.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
 
-opt_steepest_decent = neb.Optimizer.SteepestDecentNeb(epsilon, trust_radius)
-opt_fire = neb.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
-opt_verlete = neb.Optimizer.VerleteNeb(delta_t_verlete, trust_radius)
-# opt_cg = neb.Optimizer.ConjugateGradientNeb(trust_radius, gamma=0.05, n_back=50)
+opt = NEB.Optimizer()
 
-idpp_potential = idpp.IDPP(images)
-images.energy_gradient_func = idpp_potential.energy_gradient_idpp_fucntion
-opt = neb.Optimizer()
 
-name_list = ['steepest', 'verlete', 'fire', 'cg']
-opt_list = [opt_steepest_decent, opt_verlete, opt_fire]#, opt_cg]
-name_list = ['steepest']
-opt_list = [opt_steepest_decent]
+images = opt.run_opt(images, opt_fire, max_steps=max_steps, force_max=force_max, opt_minima=False, rm_rot_trans=False,
+					 tangent_method=neb_method, print_step=print_step, write_geom=write_geom)
+writer.write(os.path.join(result_path, molecule + '_' + neb_method + '_finished_Path.xyz'), images.get_positions(), atoms, energy=images.get_image_energy_list())
 
-ii = 0
-for element in opt_list:
-    imgs = deepcopy(images)
-    imgs = opt.run_opt(imgs, element, max_steps=max_steps, force_max=force_max, opt_minima=False, rm_rot_trans=True, freezing=3)
-    xyz_writer.write_images2File(imgs.get_positions(), name_list[ii] + '_FinishedIDDP.xyz', atom_list)
-    ii += 1
+
+images.set_climbing_image()
+force_max = force_max * 0.5
+trust_radius = 0.05
+opt_fire = NEB.Optimizer.FireNeb(delta_t_fire, 2*delta_t_fire, trust_radius)
+
+print("molecule = " + molecule + "\n k = %f \n opt_method = Fire \n delta_t_fire = %f \n force_max = %f \n max_steps = %d \n trust_radius = %f \n tangent_method = %s") %(k, delta_t_fire, force_max, max_steps, trust_radius, neb_method)
+
+images = opt.run_opt(images, opt_fire, max_steps=max_steps, force_max=force_max, opt_minima=False, rm_rot_trans=False,
+					 freezing=3, tangent_method=neb_method, print_step=print_step, write_geom=write_geom)
+writer.write(os.path.join(result_path, molecule + '_' + neb_method + '_finished_Path_Climbing.xyz'), images.get_positions(), atoms, energy=images.get_image_energy_list())
+print(time.clock()- t)
