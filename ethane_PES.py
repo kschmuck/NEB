@@ -1,31 +1,22 @@
-import pyQChem as qc
+import pyqchem as qc
 import os
+import numpy as np
 
-rem = qc.input_classes.rem_array(rem_init="jobtype opt")
-rem.add("GEOM_OPT_TOL_GRADIENT", "10000000000")
-rem.add("GEOM_OPT_TOL_DISPLACEMENT", "100000000000000")
-rem.add("GEOM_OPT_TOL_ENERGY", "100000000000000000")
-rem.add("GEOM_OPT_MAX_CYCLES", "1")
+rem = qc.input_classes.rem_array(rem_init="jobtype force")
 rem.add("SYM_IGNORE", "TRUE")
 rem.add("exchange", "hf")
-rem.add("basis", "aug-cc-pVDZ")
+rem.add("basis", "STO-3G")
 rem.add("GEOM_OPT_COORDS", "0")
-# rem.add("SCF_GUESS", "READ")
+
+scratch_path = os.environ.get('QCSCRATCH')
+
 
 def energy_and_gradient(xyzs, *args): # argmuent of image
-    number = args[1]
-    # flag = args[2]
-    # if flag:
-    #     rem.add("SCF_GUESS", "READ")
-    name = 'ethane_' + str(number)
-    dir = os.path.dirname(__file__)
-    folder_path = os.path.join(dir, 'scratch', name + '.dir')
-    if os.path.exists(folder_path):
-        file_path = os.path.join(folder_path, '53.0')
-        if os.path.exists(file_path):
-            file_path = os.path.join(folder_path, '54.0')
-            if os.path.exists(file_path):
-                rem.add("SCF_GUESS", "READ")
+    if len(args) != 0:
+        dijk, number = args
+        name = os.path.join('./Input_Files', 'Ethane_image_' + str(number))
+    else:
+        name = os.path.join('./Input_Files', 'Ethane')
 
     in_file = qc.input_classes.inputfile()
     geo = qc.input_classes.cartesian(
@@ -37,11 +28,28 @@ def energy_and_gradient(xyzs, *args): # argmuent of image
                      ["H", str(xyzs[15]), str(xyzs[16]), str(xyzs[17])],
                      ["H", str(xyzs[18]), str(xyzs[19]), str(xyzs[20])],
                      ["H", str(xyzs[21]), str(xyzs[22]), str(xyzs[23])]])
+
+    if os.path.isfile(os.path.join(scratch_path, name + '.dir', str(53) + '.' + str(0))):
+        rem.add("SCF_GUESS", "READ")
+
     in_file.add(geo)
     in_file.add(rem)
-    in_file.run(name=name)
+    in_file.run(name=name+'.in')
     out_file = qc.read(name + ".out", silent=True)
-    gradient = out_file.opt.gradient_vector[0].T.flatten()
-    energy = out_file.opt.energies[0]
+    if out_file.force.gradient_vector is None:
+        gradient = np.array([np.NAN] * 24).reshape(-1, 1)
+    else:
+        try:
+            gradient = out_file.force.gradient_vector.T.flatten()
+            gradient = gradient * (1/0.52917721067) # https://de.wikipedia.org/wiki/Bohrscher_Radius
+        except:
+            print("gradient error occurred")
+    if out_file.general.energy is None:
+        energy = np.NAN
+    else:
+        try:
+            energy = out_file.general.energy
+        except:
+            print('energy error occurred')
     scf_guess = None
     return energy, gradient, scf_guess # out_file.opt.energies[0], out_file.opt.gradient_vector[0]
